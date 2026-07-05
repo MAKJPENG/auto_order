@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+logs/*.csv
+logs/*.jsonl
+build/
+.build_cache/
+dist/
+*.spec

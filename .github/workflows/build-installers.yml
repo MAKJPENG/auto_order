@@ -1,0 +1,145 @@
+name: Build Installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "要打包的平台"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - windows
+          - mac
+      version:
+        description: "可选版本号，例如 0.1.1；留空则读取 order_bot/__init__.py"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare Build Metadata
+    runs-on: ubuntu-latest
+    outputs:
+      timestamp: ${{ steps.meta.outputs.timestamp }}
+    steps:
+      - name: Generate timestamp
+        id: meta
+        shell: bash
+        run: echo "timestamp=$(date -u +'%Y%m%d-%H%M%S')" >> "$GITHUB_OUTPUT"
+
+  build-windows:
+    name: Build Windows Installer
+    needs: prepare
+    if: ${{ github.event.inputs.target == 'all' || github.event.inputs.target == 'windows' }}
+    runs-on: windows-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Cache build environment
+        uses: actions/cache@v4
+        with:
+          path: |
+            .venv
+            .build_cache
+          key: windows-py310-${{ hashFiles('requirements.txt', 'requirements-build.txt') }}
+          restore-keys: |
+            windows-py310-
+
+      - name: Create virtual environment
+        shell: pwsh
+        run: |
+          if (!(Test-Path ".\.venv\Scripts\python.exe")) {
+            python -m venv .venv
+          }
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          $argsList = @(
+            "tools\build_release.py",
+            "--target", "windows",
+            "--timestamp", "${{ needs.prepare.outputs.timestamp }}"
+          )
+          $version = "${{ github.event.inputs.version }}"
+          if ($version) {
+            $argsList += @("--version", $version)
+          }
+          .\.venv\Scripts\python.exe @argsList
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: 自动下单机器人-Windows-安装包-${{ needs.prepare.outputs.timestamp }}
+          if-no-files-found: error
+          path: |
+            build/${{ needs.prepare.outputs.timestamp }}/Windows/installer/*.exe
+            build/${{ needs.prepare.outputs.timestamp }}/Windows/发给别人看这里.txt
+
+  build-mac:
+    name: Build macOS Installer
+    needs: prepare
+    if: ${{ github.event.inputs.target == 'all' || github.event.inputs.target == 'mac' }}
+    runs-on: macos-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Cache build environment
+        uses: actions/cache@v4
+        with:
+          path: |
+            .venv
+            .build_cache
+          key: mac-py310-${{ hashFiles('requirements.txt', 'requirements-build.txt') }}
+          restore-keys: |
+            mac-py310-
+
+      - name: Create virtual environment
+        shell: bash
+        run: |
+          if [ ! -x ".venv/bin/python" ]; then
+            python -m venv .venv
+          fi
+
+      - name: Build macOS installer
+        shell: bash
+        run: |
+          args=(
+            "tools/build_release.py"
+            "--target" "mac"
+            "--timestamp" "${{ needs.prepare.outputs.timestamp }}"
+          )
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            args+=("--version" "${{ github.event.inputs.version }}")
+          fi
+          .venv/bin/python "${args[@]}"
+
+      - name: Upload macOS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: 自动下单机器人-macOS-安装包-${{ needs.prepare.outputs.timestamp }}
+          if-no-files-found: error
+          path: |
+            build/${{ needs.prepare.outputs.timestamp }}/mac/*.pkg
+            build/${{ needs.prepare.outputs.timestamp }}/mac/*.dmg
+            build/${{ needs.prepare.outputs.timestamp }}/mac/发给别人看这里.txt

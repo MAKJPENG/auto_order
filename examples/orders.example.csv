@@ -1,0 +1,3 @@
+order_id,run_at,email,product_url,quantity,full_name,country,address_line,city,postal_code,payment_method,notes
+AIordertest1,,customer@example.com,https://example.com/product,2,Test Buyer,United Kingdom,23 Jamestown Way,Birmingham,B1 1BA,bank_transfer,paid
+
