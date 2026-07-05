@@ -1202,13 +1202,49 @@ class BrowserOrderClient:
                     return True
                 except Exception:
                     pass
+            if self._select_country_option_by_text(locator, country, country_code):
+                page.wait_for_timeout(500)
+                return True
 
         if self._current_country_matches(page, country):
             return True
         return self._choose_country_from_custom_select(page, country)
 
+    def _select_country_option_by_text(self, select_locator, country: str, country_code: str) -> bool:
+        options = select_locator.locator("option")
+        count = self._safe_count(options)
+        for index in range(min(count, 300)):
+            option = options.nth(index)
+            try:
+                label = option.inner_text(timeout=500)
+            except Exception:
+                label = ""
+            try:
+                value = option.get_attribute("value", timeout=500) or ""
+            except Exception:
+                value = ""
+            if not country_name_matches(label, country, country_code) and not country_name_matches(
+                value,
+                country,
+                country_code,
+            ):
+                continue
+            try:
+                select_locator.select_option(value=value, timeout=3000)
+                return True
+            except Exception:
+                try:
+                    select_locator.select_option(label=label, timeout=3000)
+                    return True
+                except Exception:
+                    pass
+        return False
+
     def _choose_country_from_custom_select(self, page, country: str) -> bool:
         country_controls = [
+            "#select2-billing_country-container",
+            "span[aria-labelledby='select2-billing_country-container']",
+            ".select2-selection--single",
             "[aria-controls='destination-dropdown']",
             ".h-select__field[role='combobox']",
             "[data-qa*='country'] [role='combobox']",
@@ -1237,6 +1273,10 @@ class BrowserOrderClient:
         page.wait_for_timeout(250)
 
         option_locators = [
+            page.locator("#select2-billing_country-results .select2-results__option"),
+            page.locator(".select2-results__option"),
+            page.locator("[id^='select2-billing_country-result']"),
+            page.locator("li[role='option']"),
             page.get_by_role("option", name=country, exact=True),
             page.get_by_role("option", name=country, exact=False),
             page.get_by_text(country, exact=True),
@@ -1341,11 +1381,15 @@ class BrowserOrderClient:
         if not expected:
             return True
         selectors = [
+            "#select2-billing_country-container",
+            "span[aria-labelledby='select2-billing_country-container']",
             "[aria-controls='destination-dropdown']",
             ".h-select__field[role='combobox']",
             "[data-qa*='country'] [role='combobox']",
             "[data-qa*='destination'] [role='combobox']",
             "[role='combobox']",
+            "#billing_country",
+            "select[name='billing_country']",
             "select[name='country']",
             "select[autocomplete='country']",
         ]
@@ -1363,18 +1407,28 @@ class BrowserOrderClient:
                         value = candidate.text_content(timeout=500) or ""
                     except Exception:
                         value = ""
-                if normalize_country_text(value) == expected:
+                if country_name_matches(value, country):
+                    return True
+                selected_label = self._selected_option_text(candidate)
+                if country_name_matches(selected_label, country):
                     return True
         return False
+
+    def _selected_option_text(self, locator) -> str:
+        try:
+            return locator.evaluate(
+                "(element) => element.tagName === 'SELECT' ? "
+                "(element.options[element.selectedIndex]?.textContent || '') : ''"
+            )
+        except Exception:
+            return ""
 
     def _locator_text_matches_country(self, locator, country: str) -> bool:
         try:
             text = locator.text_content(timeout=500) or ""
         except Exception:
             return False
-        normalized_text = normalize_country_text(text)
-        normalized_country = normalize_country_text(country)
-        return normalized_text == normalized_country or normalized_country in normalized_text.splitlines()
+        return country_name_matches(text, country)
 
     def _close_country_dropdown(self, page) -> None:
         try:
@@ -1390,6 +1444,9 @@ class BrowserOrderClient:
 
     def _fill_country_search_input(self, page, country: str) -> bool:
         selectors = [
+            "input.select2-search__field",
+            ".select2-search--dropdown input[type='search']",
+            ".select2-search--dropdown input[role='combobox']",
             "#destination-dropdown input[role='searchbox']",
             "#destination-dropdown input[type='search']",
             "[role='listbox'] input[role='searchbox']",
@@ -1910,6 +1967,36 @@ def normalize_payment_method(value: str) -> str:
 
 def normalize_country_text(value: str) -> str:
     return " ".join((value or "").strip().casefold().split())
+
+
+def country_name_matches(candidate: str, country: str, country_code: str = "") -> bool:
+    candidate_text = normalize_country_text(candidate)
+    expected = normalize_country_text(country)
+    expected_code = normalize_country_text(country_code)
+    if not expected:
+        return True
+    if not candidate_text:
+        return False
+
+    candidate_without_parentheses = normalize_country_text(re.sub(r"\s*\([^)]*\)", "", candidate or ""))
+    accepted = {expected}
+    if expected_code:
+        accepted.add(expected_code)
+    accepted.update(country_aliases(expected))
+    accepted.update(country_aliases(expected_code))
+    return candidate_text in accepted or candidate_without_parentheses in accepted
+
+
+def country_aliases(country: str) -> set[str]:
+    aliases = {
+        "united kingdom": {"gb", "uk", "great britain", "britain"},
+        "gb": {"united kingdom", "uk", "great britain", "britain"},
+        "uk": {"united kingdom", "gb", "great britain", "britain"},
+        "united states": {"us", "usa", "united states of america"},
+        "us": {"united states", "usa", "united states of america"},
+        "usa": {"united states", "us", "united states of america"},
+    }
+    return aliases.get(normalize_country_text(country), set())
 
 
 def parse_cart_count_value(value: object) -> int | None:

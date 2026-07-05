@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import queue
 import threading
 import traceback
@@ -27,6 +28,10 @@ STATUS_DRY_RUN = "演练完成"
 STATUS_SKIPPED = "已跳过"
 STATUS_FAILED = "下单失败"
 STATUS_CANCELLED = "已停止"
+
+FAILED_ROW_TAG = "failed"
+ERROR_LOG_TAG = "error"
+ERROR_LOG_KEYWORDS = ("失败", "错误", "出错", "异常", "Traceback", "Error", "Exception", "failed", "failure")
 
 
 @dataclass
@@ -151,6 +156,7 @@ class OrderBotApp:
         self.start_button.pack(side="left", padx=8)
         self.stop_button = ttk.Button(actions, text="停止等待", command=self.stop_orders, state="disabled")
         self.stop_button.pack(side="left")
+        ttk.Button(actions, text="导出订单进度", command=self.export_progress).pack(side="left", padx=8)
         ttk.Label(actions, textvariable=self.status_text).pack(side="left", padx=18)
         ttk.Label(actions, textvariable=self.progress_text).pack(side="right")
         self.progress = ttk.Progressbar(actions, mode="determinate", length=260)
@@ -164,6 +170,7 @@ class OrderBotApp:
         y_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.table.yview)
         x_scroll = ttk.Scrollbar(table_frame, orient="horizontal", command=self.table.xview)
         self.table.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
+        self.table.tag_configure(FAILED_ROW_TAG, foreground="#b00020")
         self.table.grid(row=0, column=0, sticky="nsew")
         y_scroll.grid(row=0, column=1, sticky="ns")
         x_scroll.grid(row=1, column=0, sticky="ew")
@@ -173,6 +180,7 @@ class OrderBotApp:
         log_frame = ttk.LabelFrame(outer, text="运行日志")
         log_frame.pack(fill="x")
         self.log = scrolledtext.ScrolledText(log_frame, height=7, state="disabled")
+        self.log.tag_configure(ERROR_LOG_TAG, foreground="#b00020")
         self.log.pack(fill="both", expand=True)
 
     def choose_file(self) -> None:
@@ -250,6 +258,50 @@ class OrderBotApp:
         self.status_text.set("正在停止等待，当前下单动作会先结束")
         self._append_log("收到停止请求")
 
+    def export_progress(self) -> None:
+        if not self.rows or not self.table_columns:
+            messagebox.showinfo("没有可导出数据", "当前没有订单进度，请先预览排期或开始下单。")
+            return
+
+        default_name = f"order-progress-{datetime.now(self.tz).strftime('%Y%m%d-%H%M%S')}.csv"
+        filename = filedialog.asksaveasfilename(
+            title="导出订单进度",
+            defaultextension=".csv",
+            initialfile=default_name,
+            filetypes=(("CSV files", "*.csv"), ("All files", "*.*")),
+        )
+        if not filename:
+            return
+
+        path = Path(filename)
+        try:
+            self._write_progress_csv(path)
+        except Exception as exc:
+            messagebox.showerror("导出失败", f"订单进度导出失败：{exc}")
+            self._append_log(f"订单进度导出失败：{exc}", level=ERROR_LOG_TAG)
+            return
+
+        self.status_text.set(f"订单进度已导出：{path}")
+        self._append_log(f"订单进度已导出：{path}")
+
+    def _write_progress_csv(self, path: Path) -> None:
+        headers, rows = self._progress_export_data()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", newline="", encoding="utf-8-sig") as file:
+            writer = csv.writer(file)
+            writer.writerow(headers)
+            writer.writerows(rows)
+
+    def _progress_export_data(self) -> tuple[list[str], list[list[str]]]:
+        headers = []
+        for column in self.table_columns:
+            try:
+                heading = self.table.heading(column, option="text")
+            except Exception:
+                heading = ""
+            headers.append(heading or column)
+        return headers, [self._row_values(row) for row in self.rows]
+
     def _load_schedule(self) -> list[ScheduleEntry]:
         csv_file = Path(self.csv_path.get().strip())
         if not csv_file:
@@ -309,7 +361,7 @@ class OrderBotApp:
         for index, entry in enumerate(entries):
             row = RowState(entry=entry, item_id="", row_key=f"row-{index}")
             values = self._row_values(row)
-            item_id = self.table.insert("", "end", values=values)
+            item_id = self.table.insert("", "end", values=values, tags=self._row_tags(row))
             row.item_id = item_id
             self.rows.append(row)
 
@@ -508,7 +560,7 @@ class OrderBotApp:
             return
         row.status = status
         row.message = message
-        self.table.item(row.item_id, values=self._row_values(row))
+        self.table.item(row.item_id, values=self._row_values(row), tags=self._row_tags(row))
 
     def _find_row(self, row_key: str | None, order_id: str | None) -> RowState | None:
         if row_key:
@@ -525,7 +577,7 @@ class OrderBotApp:
     def _tick_countdowns(self) -> None:
         for row in self.rows:
             if row.status in {STATUS_PENDING, STATUS_RUNNING}:
-                self.table.item(row.item_id, values=self._row_values(row))
+                self.table.item(row.item_id, values=self._row_values(row), tags=self._row_tags(row))
         self.root.after(1000, self._tick_countdowns)
 
     def _row_values(self, row: RowState) -> list[str]:
@@ -539,6 +591,11 @@ class OrderBotApp:
             "message": row.message,
         }
         return [computed.get(column, order.raw.get(column, "")) for column in self.table_columns]
+
+    def _row_tags(self, row: RowState) -> tuple[str, ...]:
+        if row.status == STATUS_FAILED:
+            return (FAILED_ROW_TAG,)
+        return ()
 
     def _format_scheduled_at(self, scheduled_at: datetime) -> str:
         if scheduled_at.tzinfo is None:
@@ -579,12 +636,20 @@ class OrderBotApp:
         self.progress.configure(maximum=max(1, total), value=finished)
         self.progress_text.set(f"{finished}/{total}")
 
-    def _append_log(self, message: str) -> None:
+    def _append_log(self, message: str, *, level: str | None = None) -> None:
         timestamp = datetime.now(self.tz).strftime("%H:%M:%S")
+        tag = ERROR_LOG_TAG if level == ERROR_LOG_TAG or self._is_error_log_message(message) else None
         self.log.configure(state="normal")
-        self.log.insert("end", f"[{timestamp}] {message}\n")
+        if tag:
+            self.log.insert("end", f"[{timestamp}] {message}\n", tag)
+        else:
+            self.log.insert("end", f"[{timestamp}] {message}\n")
         self.log.see("end")
         self.log.configure(state="disabled")
+
+    def _is_error_log_message(self, message: str) -> bool:
+        lowered = (message or "").casefold()
+        return any(keyword.casefold() in lowered for keyword in ERROR_LOG_KEYWORDS)
 
 
 def format_seconds(seconds: int) -> str:

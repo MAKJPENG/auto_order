@@ -14,6 +14,7 @@ from order_bot.browser_client import (
     PLACE_ORDER_SELECTORS,
     VIEW_CART_SELECTORS,
     BrowserOrderClient,
+    country_name_matches,
     normalize_country_text,
     parse_cart_count_value,
 )
@@ -29,6 +30,11 @@ class BrowserClientConfigTests(unittest.TestCase):
     def test_country_text_normalization(self):
         self.assertEqual(normalize_country_text("  United   Kingdom "), "united kingdom")
         self.assertEqual(normalize_country_text("HONG KONG"), "hong kong")
+
+    def test_country_name_matches_woocommerce_labels(self):
+        self.assertTrue(country_name_matches("United Kingdom (UK)", "United Kingdom"))
+        self.assertTrue(country_name_matches("GB", "United Kingdom"))
+        self.assertFalse(country_name_matches("United States (US) Minor Outlying Islands", "United States"))
 
     def test_target_closed_error_detection(self):
         client = BrowserOrderClient()
