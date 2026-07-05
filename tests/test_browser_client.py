@@ -91,6 +91,8 @@ class BrowserClientConfigTests(unittest.TestCase):
     def test_place_order_selectors_cover_foenix_checkout_button(self):
         self.assertIn("button[type='submit']:has-text('Place an order')", PLACE_ORDER_SELECTORS)
         self.assertIn("button:has-text('Place an order')", PLACE_ORDER_SELECTORS)
+        self.assertIn("#place_order", PLACE_ORDER_SELECTORS)
+        self.assertIn("button[name='woocommerce_checkout_place_order']", PLACE_ORDER_SELECTORS)
 
     def test_woocommerce_product_and_cart_selectors_are_supported(self):
         self.assertIn("button.single_add_to_cart_button[name='add-to-cart']", ADD_TO_BAG_SELECTORS)

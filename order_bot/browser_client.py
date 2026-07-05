@@ -667,9 +667,15 @@ class BrowserOrderClient:
         except timeout_error:
             pass
         for selector in [
+            "#billing_first_name",
+            "input[name='billing_first_name']",
+            "#billing_address_1",
+            "input[name='billing_address_1']",
+            "#place_order",
             "input[placeholder='Email']",
             "input[type='email']",
             "input[placeholder='Full name']",
+            "text=Billing details",
             "text=Payment",
         ]:
             try:
@@ -693,6 +699,7 @@ class BrowserOrderClient:
                 "input[aria-label='Email']",
                 "input[type='email']",
                 "input[autocomplete='email']",
+                "input[autocomplete*='email' i]",
                 "input[name='email']",
                 "#billing_email",
                 "input[name='billing_email']",
@@ -725,6 +732,7 @@ class BrowserOrderClient:
                 "input[placeholder*='First name' i]",
                 "input[aria-label='First name']",
                 "input[autocomplete='given-name']",
+                "input[autocomplete*='given-name' i]",
                 "#billing_first_name",
                 "input[name='billing_first_name']",
                 "input[name='firstName']",
@@ -740,6 +748,7 @@ class BrowserOrderClient:
                 "input[placeholder*='Last name' i]",
                 "input[aria-label='Last name']",
                 "input[autocomplete='family-name']",
+                "input[autocomplete*='family-name' i]",
                 "#billing_last_name",
                 "input[name='billing_last_name']",
                 "input[name='lastName']",
@@ -763,8 +772,11 @@ class BrowserOrderClient:
                 "input#address",
                 "input[placeholder='Address']",
                 "input[placeholder*='Address' i]",
+                "input[placeholder*='House number' i]",
+                "input[placeholder*='street name' i]",
                 "input[aria-label='Address']",
                 "input[autocomplete='address-line1']",
+                "input[autocomplete*='address-line1' i]",
                 "#billing_address_1",
                 "input[name='billing_address_1']",
                 "input[name='address']",
@@ -781,6 +793,7 @@ class BrowserOrderClient:
                 "input[placeholder*='Apartment' i]",
                 "input[placeholder*='Address line 2' i]",
                 "input[autocomplete='address-line2']",
+                "input[autocomplete*='address-line2' i]",
                 "#billing_address_2",
                 "input[name='billing_address_2']",
                 "input[name='address2']",
@@ -797,8 +810,10 @@ class BrowserOrderClient:
                 "input#city",
                 "input[placeholder='City']",
                 "input[placeholder*='City' i]",
+                "input[placeholder*='Town' i]",
                 "input[aria-label='City']",
                 "input[autocomplete='address-level2']",
+                "input[autocomplete*='address-level2' i]",
                 "#billing_city",
                 "input[name='billing_city']",
                 "input[name='city']",
@@ -818,6 +833,7 @@ class BrowserOrderClient:
                 "input[placeholder*='ZIP' i]",
                 "input[aria-label='Postal code']",
                 "input[autocomplete='postal-code']",
+                "input[autocomplete*='postal-code' i]",
                 "#billing_postcode",
                 "input[name='billing_postcode']",
                 "input[name='postalCode']",
@@ -836,7 +852,9 @@ class BrowserOrderClient:
                 "input[placeholder='Province']",
                 "input[placeholder*='State' i]",
                 "input[placeholder*='Province' i]",
+                "input[placeholder*='County' i]",
                 "input[autocomplete='address-level1']",
+                "input[autocomplete*='address-level1' i]",
                 "#billing_state",
                 "input[name='billing_state']",
                 "input[name='state']",
@@ -853,6 +871,7 @@ class BrowserOrderClient:
                 "input[aria-label='Phone']",
                 "input[type='tel']",
                 "input[autocomplete='tel']",
+                "input[autocomplete*='tel' i]",
                 "#billing_phone",
                 "input[name='billing_phone']",
                 "input[name='phone']",
@@ -1013,6 +1032,46 @@ class BrowserOrderClient:
             self._fill_locator(locator, value)
 
     def _missing_required_checkout_fields(self, page, order: Order) -> list[str]:
+        first_name_selectors = [
+            "input[placeholder='First name']",
+            "input[placeholder*='First name' i]",
+            "input[aria-label='First name']",
+            "input[autocomplete='given-name']",
+            "input[autocomplete*='given-name' i]",
+            "#billing_first_name",
+            "input[name='billing_first_name']",
+            "input[name='firstName']",
+            "input[name='first_name']",
+        ]
+        last_name_selectors = [
+            "input[placeholder='Last name']",
+            "input[placeholder*='Last name' i]",
+            "input[aria-label='Last name']",
+            "input[autocomplete='family-name']",
+            "input[autocomplete*='family-name' i]",
+            "#billing_last_name",
+            "input[name='billing_last_name']",
+            "input[name='lastName']",
+            "input[name='last_name']",
+        ]
+        full_name_selectors = [
+            "[data-qa='checkout-contactinformation-fullname'] input",
+            "[data-qa='checkout-contactinformation-name'] input",
+            "div[name='name'] input",
+            "input#name",
+            "input#fullName",
+            "input[placeholder='Full name']",
+            "input[autocomplete='name']",
+            "input[autocomplete*='name' i]",
+        ]
+        name_checks = (
+            [
+                ("first_name", order.first_name, first_name_selectors),
+                ("last_name", order.last_name, last_name_selectors),
+            ]
+            if self._has_visible_any(page, first_name_selectors + last_name_selectors)
+            else [("full_name", order.full_name, full_name_selectors)]
+        )
         checks = [
             (
                 "email",
@@ -1024,21 +1083,12 @@ class BrowserOrderClient:
                     "input[placeholder='Email']",
                     "input[type='email']",
                     "input[autocomplete='email']",
+                    "input[autocomplete*='email' i]",
+                    "#billing_email",
+                    "input[name='billing_email']",
                 ],
             ),
-            (
-                "full_name",
-                order.full_name,
-                [
-                    "[data-qa='checkout-contactinformation-fullname'] input",
-                    "[data-qa='checkout-contactinformation-name'] input",
-                    "div[name='name'] input",
-                    "input#name",
-                    "input#fullName",
-                    "input[placeholder='Full name']",
-                    "input[autocomplete='name']",
-                ],
-            ),
+            *name_checks,
             (
                 "address",
                 order.address_line,
@@ -1047,6 +1097,13 @@ class BrowserOrderClient:
                     "div[name='address'] input",
                     "input#address",
                     "input[placeholder='Address']",
+                    "input[placeholder*='Address' i]",
+                    "input[placeholder*='House number' i]",
+                    "input[placeholder*='street name' i]",
+                    "input[autocomplete='address-line1']",
+                    "input[autocomplete*='address-line1' i]",
+                    "#billing_address_1",
+                    "input[name='billing_address_1']",
                 ],
             ),
             (
@@ -1057,6 +1114,12 @@ class BrowserOrderClient:
                     "div[name='city'] input",
                     "input#city",
                     "input[placeholder='City']",
+                    "input[placeholder*='City' i]",
+                    "input[placeholder*='Town' i]",
+                    "input[autocomplete='address-level2']",
+                    "input[autocomplete*='address-level2' i]",
+                    "#billing_city",
+                    "input[name='billing_city']",
                 ],
             ),
             (
@@ -1067,6 +1130,12 @@ class BrowserOrderClient:
                     "div[name='postalCode'] input",
                     "input#postalCode",
                     "input[placeholder='Postal code']",
+                    "input[placeholder*='Postal code' i]",
+                    "input[placeholder*='Postcode' i]",
+                    "input[autocomplete='postal-code']",
+                    "input[autocomplete*='postal-code' i]",
+                    "#billing_postcode",
+                    "input[name='billing_postcode']",
                 ],
             ),
         ]
@@ -1344,6 +1413,8 @@ class BrowserOrderClient:
 
     def _choose_payment_method(self, page, payment_method: str) -> bool:
         normalized = normalize_payment_method(payment_method)
+        if self._page_has_direct_submit_without_payment_choices(page):
+            return True
         try:
             page.get_by_text("Payment", exact=False).first.scroll_into_view_if_needed(timeout=2000)
         except Exception:
@@ -1358,6 +1429,15 @@ class BrowserOrderClient:
             if self._check_payment_by_label(page, label):
                 return True
         return False
+
+    def _page_has_direct_submit_without_payment_choices(self, page) -> bool:
+        payment_controls = [
+            "input[type='radio'][name*='payment_method']",
+            "input[name='payment_method']",
+            "[role='radio'][name*='payment']",
+            "[data-qa*='payment'] [role='radio']",
+        ]
+        return self._has_visible_any(page, PLACE_ORDER_SELECTORS) and not self._has_any(page, payment_controls)
 
     def _check_payment_radio_by_value(self, page, payment_method: str) -> bool:
         values = PAYMENT_METHOD_VALUES.get(payment_method, [payment_method])
