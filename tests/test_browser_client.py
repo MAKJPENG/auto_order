@@ -5,7 +5,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from order_bot.browser_client import BrowserOrderClient, normalize_country_text
+from order_bot.browser_client import ADD_TO_BAG_SELECTORS, BrowserOrderClient, normalize_country_text
 
 
 class BrowserClientConfigTests(unittest.TestCase):
@@ -42,6 +42,13 @@ class BrowserClientConfigTests(unittest.TestCase):
 
             browser_path = os.environ["PLAYWRIGHT_BROWSERS_PATH"].replace("\\", "/")
             self.assertTrue(browser_path.endswith("/AutoOrderBot/playwright-browsers"))
+
+    def test_add_to_bag_selectors_cover_foenix_product_button(self):
+        self.assertIn("button[data-qa='productsection-btn-addtobag']", ADD_TO_BAG_SELECTORS)
+        self.assertIn(
+            ".block-product__button-wrapper button.block-product__button--primary[data-qa='productsection-btn-addtobag']",
+            ADD_TO_BAG_SELECTORS,
+        )
 
 
 if __name__ == "__main__":

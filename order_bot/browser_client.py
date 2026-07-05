@@ -29,6 +29,39 @@ PAYMENT_METHOD_LABELS = {
     "cod": ["Cash on delivery"],
 }
 
+ADD_TO_BAG_SELECTORS = [
+    ".block-product__button-wrapper button.block-product__button--primary[data-qa='productsection-btn-addtobag']",
+    ".block-product__button-wrapper button[data-qa='productsection-btn-addtobag']",
+    ".block-product__main-info button[data-qa='productsection-btn-addtobag']",
+    "button[data-qa='productsection-btn-addtobag']",
+    "button.block-product__button--primary:has-text('Add to bag')",
+    "button:has-text('Add to bag')",
+    "button.single_add_to_cart_button",
+    "button[name='add-to-cart']",
+    "form.cart button[type='submit']",
+    "button:has-text('Add to cart')",
+    "button:has-text('Add to Cart')",
+    "text=Add to bag",
+    "text=Add to cart",
+]
+
+CART_CHECKOUT_SELECTORS = [
+    "button[data-qa='shoppingcart-btn-checkout']",
+    "[data-qa='shoppingcart-btn-checkout']",
+    "[data-qa*='shoppingcart'][data-qa*='checkout']",
+    "a.checkout-button",
+    "a.wc-forward[href*='checkout']",
+    "a[href*='checkout']",
+    "button[data-qa*='checkout']",
+    "[data-qa*='checkout']",
+    "button:has-text('Checkout')",
+    "button:has-text('Check out')",
+    "button:has-text('Proceed to checkout')",
+    "a:has-text('Checkout')",
+    "text=Checkout",
+    "text=Check out",
+]
+
 
 class DryRunOrderClient:
     def place_order(self, order: Order) -> OrderAttemptResult:
@@ -89,7 +122,7 @@ class BrowserOrderClient:
             self._set_quantity(page, order.quantity)
 
             if not self._click_add_to_bag(page, PlaywrightTimeoutError):
-                result = self._failure(page, "add-to-bag button did not add product to shopping bag")
+                result = self._failure(page, "add-to-bag button did not add product to shopping bag after retries")
                 return result
 
             if not self._click_checkout_from_bag(page, PlaywrightTimeoutError):
@@ -293,39 +326,20 @@ class BrowserOrderClient:
         return True
 
     def _wait_for_product_page(self, page, timeout_error) -> None:
-        try:
-            page.wait_for_selector(
-                "[data-qa='productsection-btn-addtobag'], .block-product__main-info",
-                timeout=15000,
-            )
-        except timeout_error:
-            pass
+        self._find_visible_enabled_locator(page, ADD_TO_BAG_SELECTORS, timeout_error, timeout_ms=30000)
         page.wait_for_timeout(500)
 
     def _click_add_to_bag(self, page, timeout_error) -> bool:
-        selectors = [
-            ".block-product__main-info button[data-qa='productsection-btn-addtobag']",
-            ".block-product__button-wrapper button[data-qa='productsection-btn-addtobag']",
-            "button[data-qa='productsection-btn-addtobag']",
-            "button.block-product__button--primary:has-text('Add to bag')",
-            "button:has-text('Add to bag')",
-            "button.single_add_to_cart_button",
-            "button[name='add-to-cart']",
-            "form.cart button[type='submit']",
-            "button:has-text('Add to cart')",
-            "button:has-text('Add to Cart')",
-            "text=Add to bag",
-            "text=Add to cart",
-        ]
-        for selector in selectors:
-            locator = page.locator(selector)
-            count = self._safe_count(locator)
-            for index in range(min(count, 10)):
-                candidate = locator.nth(index)
-                if not self._is_visible(candidate):
-                    continue
-                if self._try_product_button_click(page, candidate, timeout_error):
-                    return True
+        for attempt in range(6):
+            candidate = self._find_visible_enabled_locator(
+                page,
+                ADD_TO_BAG_SELECTORS,
+                timeout_error,
+                timeout_ms=8000 if attempt == 0 else 2500,
+            )
+            if candidate is not None and self._try_product_button_click(page, candidate, timeout_error):
+                return True
+            page.wait_for_timeout(1000)
         return False
 
     def _try_product_button_click(self, page, candidate, timeout_error) -> bool:
@@ -344,39 +358,18 @@ class BrowserOrderClient:
                 attempt()
             except Exception:
                 continue
-            page.wait_for_timeout(700)
-            if self._wait_for_cart_checkout(page, timeout_error, timeout_ms=3500):
+            page.wait_for_timeout(1000)
+            if self._wait_for_cart_checkout(page, timeout_error, timeout_ms=8000):
                 return True
         return False
 
     def _click_checkout_from_bag(self, page, timeout_error) -> bool:
         if not self._wait_for_cart_checkout(page, timeout_error, timeout_ms=12000):
             return False
-        return self._click_first(
-            page,
-            [
-                "button[data-qa='shoppingcart-btn-checkout']",
-                "[data-qa='shoppingcart-btn-checkout']",
-                "a.checkout-button",
-                "a.wc-forward[href*='checkout']",
-                "a[href*='checkout']",
-                "button[data-qa*='checkout']",
-                "[data-qa*='checkout']",
-                "button:has-text('Checkout')",
-                "button:has-text('Check out')",
-                "button:has-text('Proceed to checkout')",
-                "text=Checkout",
-                "text=Check out",
-            ],
-            timeout_ms=8000,
-        )
+        return self._click_first(page, CART_CHECKOUT_SELECTORS, timeout_ms=8000)
 
     def _wait_for_cart_checkout(self, page, timeout_error, *, timeout_ms: int = 12000) -> bool:
-        selectors = [
-            "button[data-qa='shoppingcart-btn-checkout']",
-            "[data-qa='shoppingcart-btn-checkout']",
-        ]
-        for selector in selectors:
+        for selector in CART_CHECKOUT_SELECTORS:
             try:
                 page.wait_for_selector(selector, state="visible", timeout=timeout_ms)
                 return True
@@ -385,7 +378,7 @@ class BrowserOrderClient:
                     return False
             except Exception:
                 pass
-        return self._has_any(page, selectors)
+        return self._has_any(page, CART_CHECKOUT_SELECTORS)
 
     def _wait_for_checkout_page(self, page, timeout_error) -> None:
         try:
@@ -1351,6 +1344,23 @@ class BrowserOrderClient:
                 except Exception:
                     pass
         return False
+
+    def _find_visible_enabled_locator(self, page, selectors: list[str], timeout_error, *, timeout_ms: int):
+        per_selector_timeout = max(250, timeout_ms // max(1, len(selectors)))
+        for selector in selectors:
+            try:
+                page.wait_for_selector(selector, state="visible", timeout=per_selector_timeout)
+            except timeout_error:
+                continue
+            except Exception:
+                pass
+            locator = page.locator(selector)
+            count = self._safe_count(locator)
+            for index in range(min(count, 10)):
+                candidate = locator.nth(index)
+                if self._is_visible(candidate) and self._is_enabled(candidate):
+                    return candidate
+        return None
 
     def _click_element_center(self, page, locator) -> None:
         box = locator.bounding_box(timeout=2000)
