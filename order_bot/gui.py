@@ -324,6 +324,7 @@ class OrderBotApp:
                 payment_method=payment_method,
                 keep_open_on_failure=keep_open_on_failure,
                 allow_detected_country_on_mismatch=allow_detected_country_on_mismatch,
+                log_callback=lambda message: self._emit("browser_log", message=message),
             )
             if mode == "browser"
             else DryRunOrderClient()
@@ -444,6 +445,8 @@ class OrderBotApp:
         elif event == "cancelled":
             self._set_row_status(row_key, order_id, STATUS_CANCELLED, message)
             self._append_log(f"{order_id}: {message}")
+        elif event == "browser_log":
+            self._append_log(message)
         elif event == "fatal":
             self.status_text.set("任务出错")
             self._append_log(f"任务出错：{message}")

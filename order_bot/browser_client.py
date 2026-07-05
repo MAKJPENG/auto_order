@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from dataclasses import asdict
@@ -9,7 +10,7 @@ from pathlib import Path
 from typing import Callable
 
 from .models import Order, OrderAttemptResult
-from .paths import app_data_dir, log_dir
+from .paths import app_data_dir, browser_cache_dir, log_dir
 
 
 DEFAULT_PAYMENT_METHOD = "bank_transfer"
@@ -100,6 +101,7 @@ class BrowserOrderClient:
         payment_method: str = DEFAULT_PAYMENT_METHOD,
         keep_open_on_failure: bool = False,
         allow_detected_country_on_mismatch: bool = False,
+        log_callback: Callable[[str], None] | None = None,
     ):
         self.headless = headless
         self.slow_mo_ms = slow_mo_ms
@@ -107,6 +109,7 @@ class BrowserOrderClient:
         self.payment_method = normalize_payment_method(payment_method)
         self.keep_open_on_failure = keep_open_on_failure
         self.allow_detected_country_on_mismatch = allow_detected_country_on_mismatch
+        self.log_callback = log_callback
 
     def place_order(self, order: Order, *, submit_final: bool = False) -> OrderAttemptResult:
         self._configure_packaged_playwright()
@@ -248,33 +251,76 @@ class BrowserOrderClient:
 
     def _configure_packaged_playwright(self) -> None:
         if getattr(sys, "frozen", False):
-            browser_dir = app_data_dir() / "playwright-browsers"
+            browser_dir = browser_cache_dir()
+            self._migrate_legacy_browser_cache(browser_dir)
+            browser_dir.mkdir(parents=True, exist_ok=True)
             os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browser_dir)
+
+    def _migrate_legacy_browser_cache(self, browser_dir: Path) -> None:
+        legacy_dir = app_data_dir() / "playwright-browsers"
+        try:
+            if legacy_dir.resolve() == browser_dir.resolve() or not legacy_dir.exists():
+                return
+            browser_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(legacy_dir, browser_dir, dirs_exist_ok=True)
+        except Exception:
+            pass
 
     def _ensure_playwright_browser(self, playwright) -> None:
         executable_path = Path(playwright.chromium.executable_path)
         if executable_path.exists():
+            self._log(f"浏览器已安装，使用缓存：{executable_path}")
             return
         if not getattr(sys, "frozen", False):
             raise RuntimeError("Chromium browser is not installed. Run: python -m playwright install chromium")
+        self._log(f"未找到 Chromium，开始自动下载到：{os.environ.get('PLAYWRIGHT_BROWSERS_PATH', browser_cache_dir())}")
         try:
             from playwright._impl._driver import compute_driver_executable, get_driver_env
 
             driver_executable, driver_cli = compute_driver_executable()
-            completed = subprocess.run(
+            env = get_driver_env()
+            env["PLAYWRIGHT_BROWSERS_PATH"] = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", str(browser_cache_dir()))
+            process = subprocess.Popen(
                 [driver_executable, driver_cli, "install", "chromium"],
-                env=get_driver_env(),
+                env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
+                stdin=subprocess.DEVNULL,
+                **self._hidden_subprocess_kwargs(),
             )
+            output_lines: list[str] = []
+            assert process.stdout is not None
+            for raw_line in process.stdout:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                output_lines.append(line)
+                self._log(f"浏览器下载：{line}")
+            return_code = process.wait()
         except Exception as exc:
-            raise RuntimeError("Chromium browser is not installed and automatic installation failed.") from exc
-        if completed.returncode != 0:
-            output = (completed.stdout or "").strip()
+            raise RuntimeError(f"Chromium browser is not installed and automatic installation failed: {exc}") from exc
+        if return_code != 0:
+            output = "\n".join(output_lines).strip()
             raise RuntimeError(f"Chromium browser install failed.\n{output}")
         if not executable_path.exists():
             raise RuntimeError(f"Chromium install finished, but executable was not found: {executable_path}")
+        self._log(f"Chromium 下载完成：{executable_path}")
+
+    def _hidden_subprocess_kwargs(self) -> dict[str, object]:
+        if sys.platform != "win32":
+            return {}
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+
+    def _log(self, message: str) -> None:
+        if not self.log_callback:
+            return
+        try:
+            self.log_callback(message)
+        except Exception:
+            pass
 
     def _set_quantity(self, page, quantity: int) -> bool:
         quantity = max(1, quantity)

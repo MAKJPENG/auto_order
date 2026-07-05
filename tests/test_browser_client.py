@@ -31,22 +31,29 @@ class BrowserClientConfigTests(unittest.TestCase):
         )
         self.assertFalse(client._is_target_closed_error(RuntimeError("some other playwright error")))
 
-    def test_packaged_app_uses_current_directory_browser_cache(self):
+    def test_packaged_app_uses_user_browser_cache(self):
         client = BrowserOrderClient()
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            current_dir = Path(temp_dir)
+            user_data_dir = Path(temp_dir) / "AutoOrderBot"
             with (
                 patch.object(sys, "frozen", True, create=True),
-                patch.dict(os.environ, {}, clear=False),
-                patch("pathlib.Path.cwd", return_value=current_dir),
+                patch.dict(os.environ, {"AUTO_ORDER_BOT_USER_DATA_DIR": str(user_data_dir)}, clear=False),
             ):
                 os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
 
                 client._configure_packaged_playwright()
 
                 browser_path = Path(os.environ["PLAYWRIGHT_BROWSERS_PATH"])
-                self.assertEqual(browser_path, current_dir / "playwright-browsers")
+                self.assertEqual(browser_path, user_data_dir / "playwright-browsers")
+
+    def test_browser_log_callback_is_optional_and_safe(self):
+        messages: list[str] = []
+        client = BrowserOrderClient(log_callback=messages.append)
+
+        client._log("downloading")
+
+        self.assertEqual(messages, ["downloading"])
 
     def test_add_to_bag_selectors_cover_foenix_product_button(self):
         self.assertIn("button[data-qa='productsection-btn-addtobag']", ADD_TO_BAG_SELECTORS)

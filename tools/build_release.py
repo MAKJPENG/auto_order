@@ -562,8 +562,8 @@ def write_windows_delivery_readme(output_dir: Path, version: str, timestamp: str
             "- pyinstaller-work：PyInstaller 临时构建缓存。\n"
             "- pyinstaller-spec：PyInstaller 配置文件。\n"
             "- installer：最终 Windows 安装包输出目录。\n\n"
-            "首次使用浏览器下单功能时，程序会自动下载 Playwright Chromium 到当前用户目录，请保持网络可用。\n"
-            "程序运行产生的日志、排期、失败截图和浏览器缓存会保存在程序当前运行目录；安装包快捷方式默认使用安装目录。\n"
+            "首次使用浏览器下单功能时，程序会自动下载 Playwright Chromium 到当前用户固定缓存目录，请保持网络可用；同一用户后续更新安装包会复用已有缓存。\n"
+            "程序运行产生的日志、排期和失败截图会保存在程序当前运行目录；安装包快捷方式默认使用安装目录。\n"
         )
     else:
         message = (
@@ -586,8 +586,8 @@ def write_mac_delivery_readme(output_dir: Path, version: str, timestamp: str) ->
         "- pyinstaller-dist：PyInstaller 生成的 .app 程序目录。\n"
         "- pyinstaller-work：PyInstaller 临时构建缓存。\n"
         "- pyinstaller-spec：PyInstaller 配置文件。\n\n"
-        "首次使用浏览器下单功能时，程序会自动下载 Playwright Chromium 到当前用户目录，请保持网络可用。\n"
-        "程序运行产生的日志、排期、失败截图和浏览器缓存会保存在程序当前运行目录。\n"
+        "首次使用浏览器下单功能时，程序会自动下载 Playwright Chromium 到当前用户固定缓存目录，请保持网络可用；同一用户后续更新安装包会复用已有缓存。\n"
+        "程序运行产生的日志、排期和失败截图会保存在程序当前运行目录。\n"
         "Mac 安装包使用固定 bundle/package identifier；安装新版 .pkg 时会按同一个应用覆盖升级旧版。\n"
     )
     (output_dir / "发给别人看这里.txt").write_text(message, encoding="utf-8")
