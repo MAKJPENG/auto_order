@@ -213,14 +213,22 @@ class BrowserOrderClient:
             if not product_urls:
                 result = self._failure(page, "product_url is empty")
                 return result
+            self._log_step(f"订单 {order.order_id} 开始下单，共 {len(product_urls)} 个商品")
             for product_index, product_url in enumerate(product_urls, start=1):
+                self._log_step(f"打开商品页 {product_index}/{len(product_urls)}")
                 page.goto(product_url, wait_until="domcontentloaded", timeout=60000)
                 self._wait_for_product_page(page, PlaywrightTimeoutError)
 
+                self._log_step(f"设置商品数量：{order.quantity}")
                 self._set_quantity(page, order.quantity)
 
                 is_last_product = product_index == len(product_urls)
-                if not self._click_add_to_bag(page, PlaywrightTimeoutError, allow_cart_open=is_last_product):
+                if not self._click_add_to_bag(
+                    page,
+                    PlaywrightTimeoutError,
+                    allow_cart_open=is_last_product,
+                    product_label=f"商品 {product_index}/{len(product_urls)}",
+                ):
                     result = self._failure(
                         page,
                         f"product {product_index}/{len(product_urls)} add-to-bag did not add product to shopping bag after retries",
@@ -229,10 +237,12 @@ class BrowserOrderClient:
                     result.details["product_index"] = product_index
                     return result
 
+            self._log_step("所有商品已加入购物车，准备进入 Checkout")
             if not self._click_checkout_from_bag(page, PlaywrightTimeoutError):
                 result = self._failure(page, "checkout button not found in shopping bag")
                 return result
 
+            self._log_step("进入结账页，开始填写收货信息")
             self._wait_for_checkout_page(page, PlaywrightTimeoutError)
             if not self._fill_checkout(page, order):
                 result = self._failure(page, self._country_not_found_message(order))
@@ -242,6 +252,7 @@ class BrowserOrderClient:
             if submit_final:
                 missing_fields = self._missing_required_checkout_fields(page, order)
                 if missing_fields:
+                    self._log_step("检测到部分必填信息未确认，重新填写结账信息")
                     if not self._fill_checkout(page, order):
                         result = self._failure(page, self._country_not_found_message(order))
                         return result
@@ -254,6 +265,7 @@ class BrowserOrderClient:
                     )
                     return result
                 self._accept_terms(page)
+                self._log_step("准备点击 Place order 提交订单")
                 if not self._click_place_order(page, PlaywrightTimeoutError):
                     result = self._failure(page, "place-order did not reach confirmation after retries")
                     return result
@@ -418,6 +430,9 @@ class BrowserOrderClient:
         except Exception:
             pass
 
+    def _log_step(self, message: str) -> None:
+        self._log(f"下单步骤：{message}")
+
     def _set_quantity(self, page, quantity: int) -> bool:
         quantity = max(1, quantity)
         quantity_selectors = [
@@ -484,21 +499,36 @@ class BrowserOrderClient:
         self._find_visible_enabled_locator(page, ADD_TO_BAG_SELECTORS, timeout_error, timeout_ms=30000)
         page.wait_for_timeout(500)
 
-    def _click_add_to_bag(self, page, timeout_error, *, allow_cart_open: bool = True) -> bool:
+    def _click_add_to_bag(
+        self,
+        page,
+        timeout_error,
+        *,
+        allow_cart_open: bool = True,
+        product_label: str = "商品",
+    ) -> bool:
         for attempt in range(6):
+            attempt_label = f"{attempt + 1}/6"
             candidate = self._find_visible_enabled_locator(
                 page,
                 ADD_TO_BAG_SELECTORS,
                 timeout_error,
                 timeout_ms=8000 if attempt == 0 else 2500,
             )
+            if candidate is None:
+                self._log_step(f"{product_label} 未找到加入购物车按钮，重试 {attempt_label}")
+                page.wait_for_timeout(1000)
+                continue
+            self._log_step(f"{product_label} 点击加入购物车按钮（尝试 {attempt_label}）")
             if candidate is not None and self._try_product_button_click(
                 page,
                 candidate,
                 timeout_error,
                 allow_cart_open=allow_cart_open,
             ):
+                self._log_step(f"{product_label} 已加入购物车")
                 return True
+            self._log_step(f"{product_label} 加购后未检测到购物车变化，准备重试 {attempt_label}")
             page.wait_for_timeout(1000)
         return False
 
@@ -518,24 +548,32 @@ class BrowserOrderClient:
 
     def _click_checkout_from_bag(self, page, timeout_error) -> bool:
         for attempt in range(5):
+            self._log_step(f"查找 Checkout 入口（尝试 {attempt + 1}/5）")
             if self._click_first(page, CART_CHECKOUT_SELECTORS, timeout_ms=5000, attempts=1):
+                self._log_step("已点击 Checkout 按钮")
                 return True
 
+            self._log_step("尝试点击 View cart 进入购物车")
             if self._click_view_cart(page, timeout_error):
                 if self._click_first(page, CART_CHECKOUT_SELECTORS, timeout_ms=8000, attempts=3):
+                    self._log_step("已从购物车页面点击 Proceed to checkout")
                     return True
 
+            self._log_step("尝试点击右上角购物车图标打开购物车")
             if self._click_first(page, CART_TOGGLE_SELECTORS, timeout_ms=4000, attempts=1):
                 page.wait_for_timeout(1500)
                 if self._click_first(page, CART_CHECKOUT_SELECTORS, timeout_ms=7000, attempts=2):
+                    self._log_step("已从购物车弹层点击 Checkout")
                     return True
                 if self._cart_is_empty(page):
+                    self._log_step("购物车弹层为空，关闭后等待重试")
                     self._close_cart_drawer(page)
                     page.wait_for_timeout(2500)
                     continue
 
             if self._wait_for_cart_checkout(page, timeout_error, timeout_ms=3000):
                 if self._click_first(page, CART_CHECKOUT_SELECTORS, timeout_ms=5000, attempts=1):
+                    self._log_step("检测到 Checkout 后已点击")
                     return True
 
             page.wait_for_timeout(1500 + attempt * 500)
@@ -552,24 +590,31 @@ class BrowserOrderClient:
         for attempt in range(5):
             self._quiet_wait_for_network(page, timeout_error)
             if self._cart_count_increased(previous_cart_count, self._cart_total_count(page)):
+                self._log_step("检测到购物车数量增加")
                 return True
             if self._has_visible_any(page, ADD_TO_CART_DONE_SELECTORS + VIEW_CART_SELECTORS):
+                self._log_step("检测到页面提示商品已加入购物车")
                 return True
             if self._wait_for_cart_checkout(page, timeout_error, timeout_ms=1200):
+                self._log_step("检测到购物车 Checkout 入口")
                 return True
             page.wait_for_timeout(1000 + attempt * 400)
 
         if not allow_cart_open:
             return False
 
+        self._log_step("未直接确认加购完成，尝试打开购物车核对")
         for attempt in range(3):
             if self._click_first(page, CART_TOGGLE_SELECTORS, timeout_ms=3000, attempts=1):
                 page.wait_for_timeout(1800)
                 if self._cart_count_increased(previous_cart_count, self._cart_total_count(page)):
+                    self._log_step("打开购物车后确认数量已增加")
                     return True
                 if self._cart_has_items(page) or self._has_visible_any(page, CART_CHECKOUT_SELECTORS):
+                    self._log_step("打开购物车后确认已有商品")
                     return True
                 if self._cart_is_empty(page):
+                    self._log_step(f"购物车为空，等待后重试确认 {attempt + 1}/3")
                     self._close_cart_drawer(page)
                     page.wait_for_timeout(2500)
                     continue
@@ -686,6 +731,7 @@ class BrowserOrderClient:
         page.wait_for_timeout(700)
 
     def _fill_checkout(self, page, order: Order) -> bool:
+        self._log_step("填写联系邮箱")
         self._fill_checkout_field(
             page,
             order.email,
@@ -705,6 +751,7 @@ class BrowserOrderClient:
                 "input[name='billing_email']",
             ],
         )
+        self._log_step("填写收货人姓名")
         self._fill_checkout_field(
             page,
             order.full_name,
@@ -755,11 +802,13 @@ class BrowserOrderClient:
                 "input[name='last_name']",
             ],
         )
+        self._log_step(f"选择国家/地区：{order.country or '使用网站默认'}")
         if not self._select_country(page, order):
             if not self.allow_detected_country_on_mismatch:
                 return False
             if not self._select_detected_country(page):
                 return False
+        self._log_step("填写地址、城市和邮编")
         self._wait_for_hostinger_shipping_fields(page)
         self._fill_hostinger_shipping_fields(page, order)
         self._fill_checkout_field(
@@ -843,6 +892,8 @@ class BrowserOrderClient:
         )
         self._fill_shipping_fields_by_order(page, order)
         self._fill_hostinger_shipping_fields(page, order)
+        if order.value("state") or order.value("province"):
+            self._log_step("填写州/省/郡信息")
         self._fill_checkout_field(
             page,
             order.value("state") or order.value("province"),
@@ -861,6 +912,8 @@ class BrowserOrderClient:
                 "input[name='province']",
             ],
         )
+        if order.phone or order.value("phone"):
+            self._log_step("填写手机号码")
         self._fill_checkout_field(
             page,
             order.phone or order.value("phone"),
@@ -877,6 +930,8 @@ class BrowserOrderClient:
                 "input[name='phone']",
             ],
         )
+        if order.notes:
+            self._log_step("填写订单备注")
         self._fill_checkout_field(
             page,
             order.notes,
@@ -1471,7 +1526,9 @@ class BrowserOrderClient:
     def _choose_payment_method(self, page, payment_method: str) -> bool:
         normalized = normalize_payment_method(payment_method)
         if self._page_has_direct_submit_without_payment_choices(page):
+            self._log_step("页面已默认支付方式，无需手动选择")
             return True
+        self._log_step(f"检查支付方式：{normalized}")
         try:
             page.get_by_text("Payment", exact=False).first.scroll_into_view_if_needed(timeout=2000)
         except Exception:
@@ -1479,12 +1536,15 @@ class BrowserOrderClient:
         page.wait_for_timeout(400)
 
         if self._check_payment_radio_by_value(page, normalized):
+            self._log_step(f"已选择支付方式：{normalized}")
             return True
 
         labels = PAYMENT_METHOD_LABELS.get(normalized, [payment_method])
         for label in labels:
             if self._check_payment_by_label(page, label):
+                self._log_step(f"已选择支付方式：{label}")
                 return True
+        self._log_step("未找到可点击的支付方式选项，继续检查提交按钮")
         return False
 
     def _page_has_direct_submit_without_payment_choices(self, page) -> bool:
@@ -1547,8 +1607,10 @@ class BrowserOrderClient:
 
     def _click_place_order(self, page, timeout_error) -> bool:
         if self._wait_for_order_confirmation(page, timeout_error, timeout_ms=1000):
+            self._log_step("已检测到订单确认页")
             return True
         for attempt in range(5):
+            self._log_step(f"查找并点击 Place order（尝试 {attempt + 1}/5）")
             candidate = self._find_visible_enabled_locator(
                 page,
                 PLACE_ORDER_SELECTORS,
@@ -1556,13 +1618,17 @@ class BrowserOrderClient:
                 timeout_ms=10000 if attempt == 0 else 4000,
             )
             if candidate is None:
+                self._log_step(f"未找到 Place order 按钮，等待后重试 {attempt + 1}/5")
                 if self._wait_for_order_confirmation(page, timeout_error, timeout_ms=5000):
+                    self._log_step("已检测到订单确认页")
                     return True
                 page.wait_for_timeout(1000)
                 continue
             if self._click_candidate_with_fallbacks(page, candidate, click_timeout_ms=5000):
+                self._log_step("已点击 Place order，等待确认结果")
                 self._quiet_wait_for_network(page, timeout_error)
                 if self._wait_for_order_confirmation(page, timeout_error, timeout_ms=15000):
+                    self._log_step("已检测到订单确认页")
                     return True
             page.wait_for_timeout(1500)
         return self._wait_for_order_confirmation(page, timeout_error, timeout_ms=10000)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
@@ -111,11 +111,46 @@ FALLBACK_TIMEZONE_OFFSETS = {
     "Pacific/Auckland": 12,
 }
 
+DYNAMIC_FALLBACK_TIMEZONES = {
+    "Europe/London": lambda: EuropeLondonFallback(),
+}
+
+
+class EuropeLondonFallback(tzinfo):
+    key = "Europe/London"
+
+    def utcoffset(self, dt):
+        return timedelta(hours=1) if self.dst(dt) else timedelta(0)
+
+    def dst(self, dt):
+        if dt is None:
+            return timedelta(0)
+        naive = dt.replace(tzinfo=None)
+        start = datetime(naive.year, 3, _last_sunday(naive.year, 3).day, 2, 0)
+        end = datetime(naive.year, 10, _last_sunday(naive.year, 10).day, 2, 0)
+        return timedelta(hours=1) if start <= naive < end else timedelta(0)
+
+    def tzname(self, dt):
+        return "BST" if self.dst(dt) else "GMT"
+
+    def __str__(self) -> str:
+        return self.key
+
+    def fromutc(self, dt):
+        naive_utc = dt.replace(tzinfo=None)
+        start_utc = datetime(naive_utc.year, 3, _last_sunday(naive_utc.year, 3).day, 1, 0)
+        end_utc = datetime(naive_utc.year, 10, _last_sunday(naive_utc.year, 10).day, 1, 0)
+        offset = timedelta(hours=1) if start_utc <= naive_utc < end_utc else timedelta(0)
+        return (naive_utc + offset).replace(tzinfo=self)
+
 
 def get_timezone(name: str):
     try:
         return ZoneInfo(name)
     except ZoneInfoNotFoundError:
+        dynamic_factory = DYNAMIC_FALLBACK_TIMEZONES.get(name)
+        if dynamic_factory:
+            return dynamic_factory()
         if name in FALLBACK_TIMEZONE_OFFSETS:
             return timezone(timedelta(hours=FALLBACK_TIMEZONE_OFFSETS[name]), name)
         raise
@@ -196,3 +231,10 @@ def _normalize_country_key(value: str) -> str:
     return " ".join(
         "".join(character.casefold() if character.isalnum() else " " for character in (value or "")).split()
     )
+
+
+def _last_sunday(year: int, month: int) -> date:
+    candidate = date(year, month + 1, 1) - timedelta(days=1) if month < 12 else date(year, 12, 31)
+    while candidate.weekday() != 6:
+        candidate -= timedelta(days=1)
+    return candidate
