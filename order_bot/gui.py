@@ -195,7 +195,12 @@ class OrderBotApp:
 
         self._display_entries(entries)
         schedule_path = self.logs_dir / "schedule.csv"
-        save_schedule(entries, schedule_path)
+        try:
+            save_schedule(entries, schedule_path)
+        except Exception as exc:
+            messagebox.showerror("无法保存排期", f"排期已生成，但保存到文件失败：{exc}")
+            self._append_log(f"排期保存失败：{exc}")
+            return
         self.status_text.set(f"已生成排期，共 {len(entries)} 条")
         self._append_log(f"排期已生成：{schedule_path}")
 
@@ -212,7 +217,13 @@ class OrderBotApp:
 
         self._display_entries(entries)
         schedule_path = self.logs_dir / "schedule.csv"
-        save_schedule(entries, schedule_path)
+        try:
+            save_schedule(entries, schedule_path)
+        except Exception as exc:
+            messagebox.showerror("无法开始", f"排期保存失败，任务未启动：{exc}")
+            self.status_text.set("排期保存失败")
+            self._append_log(f"排期保存失败，任务未启动：{exc}")
+            return
         self.stop_event.clear()
         self.start_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
@@ -359,12 +370,7 @@ class OrderBotApp:
 
                 self._emit("running", row_key=row_key, order_id=entry.order.order_id, message="正在下单")
                 result = self._place_order(client, entry.order, mode, submit_final)
-                self.audit.record(
-                    "order_attempt",
-                    order_id=entry.order.order_id,
-                    scheduled_at=entry.scheduled_at.isoformat(),
-                    result=result_to_dict(result),
-                )
+                self._record_audit_safely(entry, result)
                 event = "done" if result.success else "failed"
                 self._emit(
                     event,
@@ -379,6 +385,17 @@ class OrderBotApp:
         finally:
             self._emit("worker_done")
 
+    def _record_audit_safely(self, entry: ScheduleEntry, result: OrderAttemptResult) -> None:
+        try:
+            self.audit.record(
+                "order_attempt",
+                order_id=entry.order.order_id,
+                scheduled_at=entry.scheduled_at.isoformat(),
+                result=result_to_dict(result),
+            )
+        except Exception as exc:
+            self._emit("browser_log", message=f"审计日志写入失败，不影响继续下单：{exc}")
+
     def _place_order(
         self,
         client: BrowserOrderClient | DryRunOrderClient,
@@ -386,9 +403,28 @@ class OrderBotApp:
         mode: str,
         submit_final: bool,
     ) -> OrderAttemptResult:
-        if mode == "browser":
-            return client.place_order(order, submit_final=submit_final)
-        return client.place_order(order)
+        try:
+            if mode == "browser":
+                return client.place_order(order, submit_final=submit_final)
+            return client.place_order(order)
+        except Exception as exc:
+            return OrderAttemptResult(
+                False,
+                False,
+                self._format_order_exception(exc),
+                {
+                    "order_id": order.order_id,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "traceback": traceback.format_exc(),
+                },
+            )
+
+    def _format_order_exception(self, exc: Exception) -> str:
+        text = str(exc).strip()
+        if not text:
+            return f"下单过程中出现异常：{type(exc).__name__}"
+        return f"下单过程中出现异常：{text}"
 
     def _wait_until(self, target: datetime, row_key: str, order_id: str) -> None:
         while not self.stop_event.is_set():
@@ -554,10 +590,15 @@ def format_seconds(seconds: int) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
-def main() -> int:
+def parse_gui_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Open the order bot desktop UI.")
     parser.add_argument("--self-test", action="store_true", help="Import-check only.")
-    args = parser.parse_args()
+    args, _unknown = parser.parse_known_args(argv)
+    return args
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_gui_args(argv)
     if args.self_test:
         return 0
 

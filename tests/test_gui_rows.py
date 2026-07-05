@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timezone
 
-from order_bot.gui import OrderBotApp, RowState, STATUS_DONE, STATUS_PENDING
+from order_bot.gui import OrderBotApp, RowState, STATUS_DONE, STATUS_PENDING, parse_gui_args
 from order_bot.models import Order, ScheduleEntry
 
 
@@ -16,6 +16,11 @@ class FakeTable:
 
 
 class GuiRowUpdateTests(unittest.TestCase):
+    def test_parse_gui_args_ignores_macos_finder_process_serial_number(self):
+        args = parse_gui_args(["--self-test", "-psn_0_12345"])
+
+        self.assertTrue(args.self_test)
+
     def make_entry(self, order_id: str) -> ScheduleEntry:
         order = Order(
             order_id=order_id,

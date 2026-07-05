@@ -321,6 +321,7 @@ def build_mac(output_dir: Path, version: str, timestamp: str) -> None:
             shutil.rmtree(display_app_path)
         app_path.rename(display_app_path)
         app_path = display_app_path
+    run([str(mac_app_executable(app_path)), "--self-test"])
 
     pkg_path = output_dir / f"{APP_NAME}-{version}-{timestamp}.pkg"
     run(
@@ -361,6 +362,10 @@ def build_mac(output_dir: Path, version: str, timestamp: str) -> None:
         except subprocess.CalledProcessError as exc:
             print(f"DMG creation failed; keeping pkg installer: {exc}")
     write_mac_delivery_readme(output_dir, version, timestamp)
+
+
+def mac_app_executable(app_path: Path) -> Path:
+    return app_path / "Contents" / "MacOS" / APP_INTERNAL_NAME
 
 
 def generate_icons(assets_dir: Path) -> dict[str, Path]:

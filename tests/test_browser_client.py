@@ -55,6 +55,23 @@ class BrowserClientConfigTests(unittest.TestCase):
 
         self.assertEqual(messages, ["downloading"])
 
+    def test_existing_browser_cache_does_not_write_log(self):
+        messages: list[str] = []
+        client = BrowserOrderClient(log_callback=messages.append)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            executable_path = Path(temp_dir) / "chrome.exe"
+            executable_path.write_text("", encoding="utf-8")
+            fake_playwright = type(
+                "FakePlaywright",
+                (),
+                {"chromium": type("FakeChromium", (), {"executable_path": str(executable_path)})()},
+            )()
+
+            client._ensure_playwright_browser(fake_playwright)
+
+        self.assertEqual(messages, [])
+
     def test_add_to_bag_selectors_cover_foenix_product_button(self):
         self.assertIn("button[data-qa='productsection-btn-addtobag']", ADD_TO_BAG_SELECTORS)
         self.assertIn(

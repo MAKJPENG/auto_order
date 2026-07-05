@@ -22,6 +22,14 @@ class BuildReleaseTests(unittest.TestCase):
         self.assertFalse(build_release.should_bundle_playwright_browser("windows"))
         self.assertFalse(build_release.should_bundle_playwright_browser("mac"))
 
+    def test_mac_app_executable_uses_internal_binary_name(self):
+        app_path = Path("/tmp/自动下单机器人.app")
+
+        self.assertEqual(
+            build_release.mac_app_executable(app_path),
+            app_path / "Contents" / "MacOS" / build_release.APP_INTERNAL_NAME,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

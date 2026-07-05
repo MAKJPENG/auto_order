@@ -118,17 +118,20 @@ class BrowserOrderClient:
             from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
             from playwright.sync_api import sync_playwright
         except ImportError as exc:
-            raise RuntimeError(
-                "Playwright is not installed. Run: pip install -r requirements.txt "
-                "and then: python -m playwright install chromium"
-            ) from exc
+            return self._exception_failure(
+                None,
+                order,
+                "Playwright 依赖未安装，安装包可能不完整，请重新下载安装包",
+                exc,
+            )
 
-        playwright = sync_playwright().start()
+        playwright = None
         browser = None
         context = None
         page = None
         result: OrderAttemptResult | None = None
         try:
+            playwright = sync_playwright().start()
             self._ensure_playwright_browser(playwright)
             browser = playwright.chromium.launch(
                 headless=self.headless,
@@ -194,6 +197,9 @@ class BrowserOrderClient:
                 )
                 return result
             raise
+        except Exception as exc:
+            result = self._exception_failure(page, order, self._order_exception_message(exc), exc)
+            return result
         finally:
             if not self._keep_failure_session_for_review(playwright, browser, context, page, result):
                 self._close_browser_session(playwright, browser, context)
@@ -269,10 +275,9 @@ class BrowserOrderClient:
     def _ensure_playwright_browser(self, playwright) -> None:
         executable_path = Path(playwright.chromium.executable_path)
         if executable_path.exists():
-            self._log(f"浏览器已安装，使用缓存：{executable_path}")
             return
         if not getattr(sys, "frozen", False):
-            raise RuntimeError("Chromium browser is not installed. Run: python -m playwright install chromium")
+            raise RuntimeError("Chromium 浏览器未安装，请先运行：python -m playwright install chromium")
         self._log(f"未找到 Chromium，开始自动下载到：{os.environ.get('PLAYWRIGHT_BROWSERS_PATH', browser_cache_dir())}")
         try:
             from playwright._impl._driver import compute_driver_executable, get_driver_env
@@ -301,12 +306,12 @@ class BrowserOrderClient:
                 self._log(f"浏览器下载：{line}")
             return_code = process.wait()
         except Exception as exc:
-            raise RuntimeError(f"Chromium browser is not installed and automatic installation failed: {exc}") from exc
+            raise RuntimeError(f"Chromium 浏览器未安装，自动下载启动失败：{exc}") from exc
         if return_code != 0:
             output = "\n".join(output_lines).strip()
-            raise RuntimeError(f"Chromium browser install failed.\n{output}")
+            raise RuntimeError(f"Chromium 浏览器下载失败，请检查网络后重试。\n{output}")
         if not executable_path.exists():
-            raise RuntimeError(f"Chromium install finished, but executable was not found: {executable_path}")
+            raise RuntimeError(f"Chromium 下载结束，但没有找到浏览器文件：{executable_path}")
         self._log(f"Chromium 下载完成：{executable_path}")
 
     def _hidden_subprocess_kwargs(self) -> dict[str, object]:
@@ -1516,6 +1521,30 @@ class BrowserOrderClient:
             or "browser has been closed" in text
             or "page has been closed" in text
         )
+
+    def _order_exception_message(self, exc: Exception) -> str:
+        if self._is_target_closed_error(exc):
+            return "浏览器窗口被关闭，当前订单已停止"
+        text = str(exc).strip()
+        if "net::ERR" in text or "Timeout" in type(exc).__name__:
+            return "网页加载或操作超时，请检查网络、商品链接或网站是否响应"
+        if "Chromium" in text or "browser" in text.lower():
+            return "浏览器启动或下载失败，请检查网络和浏览器缓存目录权限"
+        return "下单过程中出现异常，已记录错误信息"
+
+    def _exception_failure(self, page, order: Order, message: str, exc: Exception) -> OrderAttemptResult:
+        detail = str(exc).strip()
+        if detail:
+            message = f"{message}：{detail}"
+        result = self._failure(page, message) if page is not None else OrderAttemptResult(False, False, message, {})
+        result.details.update(
+            {
+                "order_id": order.order_id,
+                "error_type": type(exc).__name__,
+                "error": detail,
+            }
+        )
+        return result
 
     def _failure(self, page, message: str) -> OrderAttemptResult:
         details = {}
