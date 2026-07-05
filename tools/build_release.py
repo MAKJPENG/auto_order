@@ -24,7 +24,26 @@ CHROMIUM_MARKER = BUILD_CACHE_DIR / "playwright-chromium.version"
 REQUIRED_IMPORTS = ("playwright", "PyInstaller", "PIL")
 
 
+def configure_stdio_encoding() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+            except Exception:
+                pass
+
+
+def log(message: str) -> None:
+    try:
+        print(message)
+    except UnicodeEncodeError:
+        encoding = sys.stdout.encoding or "utf-8"
+        safe_message = message.encode(encoding, errors="backslashreplace").decode(encoding, errors="replace")
+        print(safe_message)
+
+
 def main() -> int:
+    configure_stdio_encoding()
     parser = argparse.ArgumentParser(description="Build installable packages for 自动下单机器人.")
     parser.add_argument(
         "--target",
@@ -575,7 +594,7 @@ def write_mac_delivery_readme(output_dir: Path, version: str, timestamp: str) ->
 
 
 def run(command: list[str], *, env: dict[str, str] | None = None) -> None:
-    print("+ " + " ".join(str(part) for part in command))
+    log("+ " + " ".join(str(part) for part in command))
     subprocess.run(command, cwd=ROOT, env=env, check=True)
 
 

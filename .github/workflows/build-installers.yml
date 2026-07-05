@@ -43,6 +43,9 @@ jobs:
     needs: prepare
     if: ${{ github.event.inputs.target == 'all' || github.event.inputs.target == 'windows' }}
     runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
