@@ -55,6 +55,7 @@ def main() -> int:
     parser.add_argument("--version", help="Override package version. Defaults to order_bot.__version__.")
     parser.add_argument("--skip-deps", action="store_true", help="Do not install build dependencies first.")
     parser.add_argument("--skip-browser-install", action="store_true", help="Do not run playwright install chromium.")
+    parser.add_argument("--mac-dmg", action="store_true", help="Also create a macOS .dmg wrapper around the .pkg installer.")
     args = parser.parse_args()
 
     version = args.version or read_version()
@@ -94,7 +95,7 @@ def main() -> int:
             if platform.system() != "Darwin":
                 write_skipped(mac_dir, "mac installer must be built on macOS. Run ./build_mac.sh there.")
                 continue
-            build_mac(mac_dir, version, timestamp)
+            build_mac(mac_dir, version, timestamp, include_dmg=args.mac_dmg)
 
     print(f"Done. Output: {build_root}")
     return 0
@@ -278,7 +279,7 @@ def build_windows(output_dir: Path, version: str, timestamp: str) -> None:
     write_windows_delivery_readme(output_dir, version, timestamp, installer_created=True)
 
 
-def build_mac(output_dir: Path, version: str, timestamp: str) -> None:
+def build_mac(output_dir: Path, version: str, timestamp: str, *, include_dmg: bool = False) -> None:
     assets_dir = output_dir / "assets"
     icon_paths = generate_icons(assets_dir)
     dist_dir = output_dir / "pyinstaller-dist"
@@ -343,7 +344,7 @@ def build_mac(output_dir: Path, version: str, timestamp: str) -> None:
         ]
     )
 
-    if shutil.which("hdiutil"):
+    if include_dmg and shutil.which("hdiutil"):
         dmg_path = output_dir / f"{APP_NAME}-{version}-{timestamp}.dmg"
         dmg_source_dir = output_dir / "dmg-source"
         dmg_source_dir.mkdir(parents=True, exist_ok=True)
@@ -365,7 +366,11 @@ def build_mac(output_dir: Path, version: str, timestamp: str) -> None:
             )
         except subprocess.CalledProcessError as exc:
             print(f"DMG creation failed; keeping pkg installer: {exc}")
-    write_mac_delivery_readme(output_dir, version, timestamp)
+    elif include_dmg:
+        print("DMG creation requested but hdiutil is not available; keeping pkg installer only.")
+    else:
+        print("Skip DMG creation; macOS installer output is pkg only.")
+    write_mac_delivery_readme(output_dir, version, timestamp, include_dmg=include_dmg)
 
 
 def mac_app_executable(app_path: Path) -> Path:
@@ -584,12 +589,17 @@ def write_windows_delivery_readme(output_dir: Path, version: str, timestamp: str
     (output_dir / "发给别人看这里.txt").write_text(message, encoding="utf-8")
 
 
-def write_mac_delivery_readme(output_dir: Path, version: str, timestamp: str) -> None:
+def write_mac_delivery_readme(output_dir: Path, version: str, timestamp: str, *, include_dmg: bool) -> None:
     pkg_name = f"{APP_NAME}-{version}-{timestamp}.pkg"
     dmg_name = f"{APP_NAME}-{version}-{timestamp}.dmg"
+    dmg_note = (
+        f"本次已选择生成 DMG：如果同目录生成了 {dmg_name}，也可以发送这个 .dmg。\n\n"
+        if include_dmg
+        else "本次未选择生成 DMG，默认只生成体积更小的 .pkg 安装包。\n\n"
+    )
     message = (
         f"发给别人安装：{pkg_name}\n"
-        f"如果同目录生成了 {dmg_name}，也可以发送这个 .dmg。\n\n"
+        f"{dmg_note}"
         "其它目录说明：\n"
         "- assets：自动生成的图标文件。\n"
         "- pyinstaller-dist：PyInstaller 生成的 .app 程序目录。\n"

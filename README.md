@@ -190,7 +190,13 @@ Mac 打包：
 sh build_mac.sh
 ```
 
-Mac 会生成 `.pkg` 安装包，并尽量额外生成 `.dmg`。安装包使用固定 bundle/package identifier，后续新版安装包会按同一应用升级。
+Mac 默认只生成 `.pkg` 安装包，体积更小。安装包使用固定 bundle/package identifier，后续新版安装包会按同一应用升级。
+
+如果确实需要额外生成 `.dmg`，可以手动加参数：
+
+```bash
+sh build_mac.sh --mac-dmg
+```
 
 Mac 安装包不把 Chromium 浏览器本体塞进 `.app`，首次使用浏览器下单功能时会自动下载到当前用户固定缓存目录，请保持网络可用；同一用户后续更新安装包会复用已有缓存。
 
@@ -200,7 +206,7 @@ Mac 最终发给别人的是：
 build/YYYYMMDD-HHMMSS/mac/自动下单机器人-版本号-时间戳.pkg
 ```
 
-如果同目录生成了 `.dmg`，也可以把 `.dmg` 发给别人安装。
+如果选择生成 `.dmg`，同目录会额外出现 `.dmg`，也可以把 `.dmg` 发给别人安装。
 
 ### 用 GitHub Actions 打包 Mac 安装包
 
@@ -218,17 +224,18 @@ build/YYYYMMDD-HHMMSS/mac/自动下单机器人-版本号-时间戳.pkg
    - `windows`：只打包 Windows。
    - `mac`：只打包 Mac。
 7. `version` 可以留空；如果要升级版本，填例如 `0.1.1`。
-8. `publish_release` 默认保持勾选；任务成功后会自动发布到仓库首页右侧的 `Releases` 下载区。
-9. 等任务跑完后，可以在本次运行记录底部 `Artifacts` 下载，也可以回到仓库首页右侧 `Releases` 下载。
+8. `build_mac_dmg` 默认不勾选；不勾选时只生成 Mac `.pkg`，勾选后才额外生成 `.dmg`。
+9. `publish_release` 默认保持勾选；任务成功后会自动发布到仓库首页右侧的 `Releases` 下载区。
+10. 等任务跑完后，可以在本次运行记录底部 `Artifacts` 下载，也可以回到仓库首页右侧 `Releases` 下载。
 
 下载文件说明：
 
 - `自动下单机器人-Windows-安装包-时间戳`：里面是 Windows `.exe` 安装包。
-- `自动下单机器人-macOS-安装包-时间戳`：里面是 Mac `.pkg`，如果生成了 `.dmg` 也会一起放进去。
+- `自动下单机器人-macOS-安装包-时间戳`：默认里面是 Mac `.pkg`；只有勾选 `build_mac_dmg` 时，`.dmg` 才会一起放进去。
 
 GitHub Actions 已配置缓存：依赖成功下载一次后，后续通常会复用缓存。Windows 和 Mac 安装包都会在用户首次使用浏览器功能时自动下载 Chromium，避免打包阶段处理浏览器深层目录或可执行文件失败。
 
-自动发布的 Release 标签格式为 `installers-YYYYMMDD-HHMMSS`，里面会直接附上 `.exe`、`.pkg`、`.dmg` 等安装文件。
+自动发布的 Release 标签格式为 `installers-YYYYMMDD-HHMMSS`，里面会直接附上 `.exe`、`.pkg`；只有勾选生成 DMG 时才会附上 `.dmg`。
 
 注意：当前 Mac 安装包默认未做 Apple 开发者签名和公证。自己或小范围测试通常可以安装；如果要大量发给陌生用户，建议购买 Apple Developer 账号后再增加签名、公证流程。
 

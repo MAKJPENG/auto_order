@@ -16,6 +16,11 @@ on:
         description: "可选版本号，例如 0.1.1；留空则读取 order_bot/__init__.py"
         required: false
         type: string
+      build_mac_dmg:
+        description: "是否额外生成 macOS .dmg（默认不生成，安装用 .pkg 即可）"
+        required: true
+        default: false
+        type: boolean
       publish_release:
         description: "是否发布到 GitHub Releases 下载区"
         required: true
@@ -141,6 +146,9 @@ jobs:
           if [ -n "${{ github.event.inputs.version }}" ]; then
             args+=("--version" "${{ github.event.inputs.version }}")
           fi
+          if [ "${{ inputs.build_mac_dmg }}" = "true" ]; then
+            args+=("--mac-dmg")
+          fi
           .venv/bin/python "${args[@]}"
 
       - name: Upload macOS installer
@@ -181,6 +189,7 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG_NAME: installers-${{ needs.prepare.outputs.timestamp }}
           RELEASE_TITLE: 自动下单机器人安装包 ${{ needs.prepare.outputs.timestamp }}
         shell: bash
@@ -189,7 +198,7 @@ jobs:
           自动下单机器人安装包
 
           - Windows：下载 .exe 安装程序。
-          - macOS：下载 .pkg 安装包；如果有 .dmg，也可以下载 .dmg。
+          - macOS：默认下载 .pkg 安装包；只有运行工作流时勾选生成 DMG，才会额外附上 .dmg。
           - macOS 首次使用浏览器下单功能时需要联网下载 Chromium。
           EOF
 
