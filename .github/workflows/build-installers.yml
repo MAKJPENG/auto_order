@@ -16,9 +16,15 @@ on:
         description: "可选版本号，例如 0.1.1；留空则读取 order_bot/__init__.py"
         required: false
         type: string
+      publish_release:
+        description: "是否发布到 GitHub Releases 下载区"
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   prepare:
@@ -143,3 +149,62 @@ jobs:
             build/${{ needs.prepare.outputs.timestamp }}/mac/*.pkg
             build/${{ needs.prepare.outputs.timestamp }}/mac/*.dmg
             build/${{ needs.prepare.outputs.timestamp }}/mac/发给别人看这里.txt
+
+  publish-release:
+    name: Publish GitHub Release
+    needs:
+      - prepare
+      - build-windows
+      - build-mac
+    if: >-
+      ${{
+        always() &&
+        inputs.publish_release &&
+        needs.prepare.result == 'success' &&
+        (needs.build-windows.result == 'success' || needs.build-windows.result == 'skipped') &&
+        (needs.build-mac.result == 'success' || needs.build-mac.result == 'skipped')
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Download installer artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: 自动下单机器人-*-安装包-${{ needs.prepare.outputs.timestamp }}
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: installers-${{ needs.prepare.outputs.timestamp }}
+          RELEASE_TITLE: 自动下单机器人安装包 ${{ needs.prepare.outputs.timestamp }}
+        shell: bash
+        run: |
+          cat > release-notes.md <<'EOF'
+          自动下单机器人安装包
+
+          - Windows：下载 .exe 安装程序。
+          - macOS：下载 .pkg 安装包；如果有 .dmg，也可以下载 .dmg。
+          - macOS 首次使用浏览器下单功能时需要联网下载 Chromium。
+          EOF
+
+          mapfile -d '' assets < <(find release-assets -type f \( -name '*.exe' -o -name '*.pkg' -o -name '*.dmg' \) -print0)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "No installer files found in downloaded artifacts." >&2
+            find release-assets -type f >&2
+            exit 1
+          fi
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release edit "$TAG_NAME" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md
+          else
+            gh release create "$TAG_NAME" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md \
+              --target "$GITHUB_SHA"
+          fi
+          gh release upload "$TAG_NAME" "${assets[@]}" --clobber

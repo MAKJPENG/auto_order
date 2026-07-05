@@ -212,7 +212,8 @@ build/YYYYMMDD-HHMMSS/mac/自动下单机器人-版本号-时间戳.pkg
    - `windows`：只打包 Windows。
    - `mac`：只打包 Mac。
 7. `version` 可以留空；如果要升级版本，填例如 `0.1.1`。
-8. 等任务跑完后，打开本次运行记录，在页面底部 `Artifacts` 下载安装包。
+8. `publish_release` 默认保持勾选；任务成功后会自动发布到仓库首页右侧的 `Releases` 下载区。
+9. 等任务跑完后，可以在本次运行记录底部 `Artifacts` 下载，也可以回到仓库首页右侧 `Releases` 下载。
 
 下载文件说明：
 
@@ -220,6 +221,8 @@ build/YYYYMMDD-HHMMSS/mac/自动下单机器人-版本号-时间戳.pkg
 - `自动下单机器人-macOS-安装包-时间戳`：里面是 Mac `.pkg`，如果生成了 `.dmg` 也会一起放进去。
 
 GitHub Actions 已配置缓存：依赖成功下载一次后，后续通常会复用缓存。Windows 安装包会打进 Playwright Chromium；Mac 安装包会在用户首次使用浏览器功能时自动下载 Chromium，避免 macOS 打包阶段处理浏览器可执行文件失败。
+
+自动发布的 Release 标签格式为 `installers-YYYYMMDD-HHMMSS`，里面会直接附上 `.exe`、`.pkg`、`.dmg` 等安装文件。
 
 注意：当前 Mac 安装包默认未做 Apple 开发者签名和公证。自己或小范围测试通常可以安装；如果要大量发给陌生用户，建议购买 Apple Developer 账号后再增加签名、公证流程。
 
