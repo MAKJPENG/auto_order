@@ -144,7 +144,8 @@ python -m order_bot --csv "D:\Tencent\xwechat_files\wxid_3r5n3ilqh0c522_480c\msg
 
 - `logs/schedule.csv`：本次生成的排期
 - `logs/orders.jsonl`：每次执行结果的审计日志
-- 程序运行产生的日志、排期和失败截图都会保存在当前运行目录；Chromium 浏览器缓存保存在当前用户固定目录，安装新版后会复用，不会每次更新都重新下载。
+- 源码脚本运行时，日志、排期和失败截图保存在当前运行目录；Mac 安装包运行时会保存到 `~/Library/Application Support/AutoOrderBot/logs`，避免写入只读系统目录。
+- Chromium 浏览器缓存保存在当前用户固定目录，安装新版后会复用，不会每次更新都重新下载。
 
 ## 打包安装程序
 

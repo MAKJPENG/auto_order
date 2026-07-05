@@ -9,7 +9,11 @@ APP_DATA_DIR_NAME = "AutoOrderBot"
 
 def app_data_dir() -> Path:
     override = os.environ.get("AUTO_ORDER_BOT_DATA_DIR")
-    return Path(override).expanduser() if override else Path.cwd()
+    if override:
+        return Path(override).expanduser()
+    if getattr(sys, "frozen", False) and sys.platform == "darwin":
+        return user_data_dir()
+    return Path.cwd()
 
 
 def user_data_dir() -> Path:
