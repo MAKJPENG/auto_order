@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -8,7 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from .models import Order, OrderAttemptResult
-from .paths import log_dir
+from .paths import app_data_dir, log_dir
 
 
 DEFAULT_PAYMENT_METHOD = "bank_transfer"
@@ -75,6 +76,7 @@ class BrowserOrderClient:
         page = None
         result: OrderAttemptResult | None = None
         try:
+            self._ensure_playwright_browser(playwright)
             browser = playwright.chromium.launch(
                 headless=self.headless,
                 slow_mo=self.slow_mo_ms,
@@ -200,7 +202,36 @@ class BrowserOrderClient:
 
     def _configure_packaged_playwright(self) -> None:
         if getattr(sys, "frozen", False):
-            os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
+            if sys.platform == "darwin":
+                browser_dir = app_data_dir() / "playwright-browsers"
+                os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browser_dir)
+            else:
+                os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
+
+    def _ensure_playwright_browser(self, playwright) -> None:
+        executable_path = Path(playwright.chromium.executable_path)
+        if executable_path.exists():
+            return
+        if not getattr(sys, "frozen", False):
+            raise RuntimeError("Chromium browser is not installed. Run: python -m playwright install chromium")
+        try:
+            from playwright._impl._driver import compute_driver_executable, get_driver_env
+
+            driver_executable, driver_cli = compute_driver_executable()
+            completed = subprocess.run(
+                [driver_executable, driver_cli, "install", "chromium"],
+                env=get_driver_env(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+        except Exception as exc:
+            raise RuntimeError("Chromium browser is not installed and automatic installation failed.") from exc
+        if completed.returncode != 0:
+            output = (completed.stdout or "").strip()
+            raise RuntimeError(f"Chromium browser install failed.\n{output}")
+        if not executable_path.exists():
+            raise RuntimeError(f"Chromium install finished, but executable was not found: {executable_path}")
 
     def _set_quantity(self, page, quantity: int) -> bool:
         quantity = max(1, quantity)

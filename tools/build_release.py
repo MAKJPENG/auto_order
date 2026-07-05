@@ -53,7 +53,11 @@ def main() -> int:
     if buildable_targets and not args.skip_deps:
         install_build_dependencies()
     if buildable_targets and not args.skip_browser_install:
-        install_playwright_browser()
+        bundled_browser_targets = [target for target in buildable_targets if should_bundle_playwright_browser(target)]
+        if bundled_browser_targets:
+            install_playwright_browser()
+        else:
+            print("Skip bundled Playwright Chromium for macOS; the packaged app installs it on first browser use.")
     if targets and not buildable_targets:
         print("No selected target can be built on this operating system; writing notes only.")
 
@@ -88,6 +92,10 @@ def resolve_targets(target: str) -> list[str]:
 def target_supported_here(target: str) -> bool:
     system = platform.system()
     return (target == "windows" and system == "Windows") or (target == "mac" and system == "Darwin")
+
+
+def should_bundle_playwright_browser(target: str) -> bool:
+    return target == "windows"
 
 
 def read_version() -> str:
@@ -141,6 +149,17 @@ def packaged_chromium_exists() -> bool:
     }
     executable_name = executable_names.get(platform.system(), "chrome")
     return any(path.name == executable_name for path in browsers_dir.rglob(executable_name))
+
+
+def remove_packaged_playwright_browsers() -> None:
+    try:
+        import playwright
+    except Exception:
+        return
+    browsers_dir = Path(playwright.__file__).resolve().parent / "driver" / "package" / ".local-browsers"
+    if browsers_dir.exists():
+        shutil.rmtree(browsers_dir)
+        print(f"Removed Playwright browser cache before macOS packaging: {browsers_dir}")
 
 
 def requirements_hash() -> str:
@@ -244,9 +263,9 @@ def build_mac(output_dir: Path, version: str, timestamp: str) -> None:
     dist_dir = output_dir / "pyinstaller-dist"
     work_dir = output_dir / "pyinstaller-work"
     spec_dir = output_dir / "pyinstaller-spec"
+    remove_packaged_playwright_browsers()
 
     env = os.environ.copy()
-    env["PLAYWRIGHT_BROWSERS_PATH"] = "0"
     run(
         [
             sys.executable,
@@ -549,6 +568,7 @@ def write_mac_delivery_readme(output_dir: Path, version: str, timestamp: str) ->
         "- pyinstaller-dist：PyInstaller 生成的 .app 程序目录。\n"
         "- pyinstaller-work：PyInstaller 临时构建缓存。\n"
         "- pyinstaller-spec：PyInstaller 配置文件。\n\n"
+        "首次使用浏览器下单功能时，程序会自动下载 Playwright Chromium 到当前用户目录，请保持网络可用。\n"
         "Mac 安装包使用固定 bundle/package identifier；安装新版 .pkg 时会按同一个应用覆盖升级旧版。\n"
     )
     (output_dir / "发给别人看这里.txt").write_text(message, encoding="utf-8")

@@ -186,6 +186,8 @@ sh build_mac.sh
 
 Mac 会生成 `.pkg` 安装包，并尽量额外生成 `.dmg`。安装包使用固定 bundle/package identifier，后续新版安装包会按同一应用升级。
 
+Mac 安装包不把 Chromium 浏览器本体塞进 `.app`，首次使用浏览器下单功能时会自动下载到当前用户目录，请保持网络可用。
+
 Mac 最终发给别人的是：
 
 ```text
@@ -217,7 +219,7 @@ build/YYYYMMDD-HHMMSS/mac/自动下单机器人-版本号-时间戳.pkg
 - `自动下单机器人-Windows-安装包-时间戳`：里面是 Windows `.exe` 安装包。
 - `自动下单机器人-macOS-安装包-时间戳`：里面是 Mac `.pkg`，如果生成了 `.dmg` 也会一起放进去。
 
-GitHub Actions 已配置缓存：依赖和 Playwright Chromium 成功下载一次后，后续通常会复用缓存；只有依赖文件变化、缓存过期或 Playwright 浏览器版本变化时才会重新下载。
+GitHub Actions 已配置缓存：依赖成功下载一次后，后续通常会复用缓存。Windows 安装包会打进 Playwright Chromium；Mac 安装包会在用户首次使用浏览器功能时自动下载 Chromium，避免 macOS 打包阶段处理浏览器可执行文件失败。
 
 注意：当前 Mac 安装包默认未做 Apple 开发者签名和公证。自己或小范围测试通常可以安装；如果要大量发给陌生用户，建议购买 Apple Developer 账号后再增加签名、公证流程。
 

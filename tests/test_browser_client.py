@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
+import sys
 import unittest
+from unittest.mock import patch
 
 from order_bot.browser_client import BrowserOrderClient, normalize_country_text
 
@@ -25,6 +28,21 @@ class BrowserClientConfigTests(unittest.TestCase):
             )
         )
         self.assertFalse(client._is_target_closed_error(RuntimeError("some other playwright error")))
+
+    def test_packaged_macos_uses_user_browser_cache(self):
+        client = BrowserOrderClient()
+
+        with (
+            patch.object(sys, "frozen", True, create=True),
+            patch.object(sys, "platform", "darwin"),
+            patch.dict(os.environ, {}, clear=False),
+        ):
+            os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
+
+            client._configure_packaged_playwright()
+
+            browser_path = os.environ["PLAYWRIGHT_BROWSERS_PATH"].replace("\\", "/")
+            self.assertTrue(browser_path.endswith("/AutoOrderBot/playwright-browsers"))
 
 
 if __name__ == "__main__":
