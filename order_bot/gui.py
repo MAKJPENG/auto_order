@@ -591,7 +591,7 @@ class OrderBotApp:
             "status": row.status,
             "countdown": self._countdown_text(row),
             "scheduled_at": self._format_scheduled_at(row.entry.scheduled_at),
-            "timezone": timezone_label(row.entry.scheduled_at.tzinfo),
+            "timezone": self._format_timezone(row.entry.scheduled_at),
             "source": row.entry.source,
             "message": row.message,
         }
@@ -606,6 +606,19 @@ class OrderBotApp:
         if scheduled_at.tzinfo is None:
             scheduled_at = scheduled_at.replace(tzinfo=self.tz)
         return scheduled_at.strftime("%Y-%m-%d %H:%M:%S")
+
+    def _format_timezone(self, scheduled_at: datetime) -> str:
+        if scheduled_at.tzinfo is None:
+            scheduled_at = scheduled_at.replace(tzinfo=self.tz)
+        offset = scheduled_at.utcoffset()
+        label = timezone_label(scheduled_at.tzinfo)
+        if offset is None:
+            return label
+        total_minutes = int(offset.total_seconds() / 60)
+        sign = "+" if total_minutes >= 0 else "-"
+        total_minutes = abs(total_minutes)
+        hours, minutes = divmod(total_minutes, 60)
+        return f"({sign}{hours:02d}:{minutes:02d}) {label}"
 
     def _countdown_text(self, row: RowState) -> str:
         if row.status in {

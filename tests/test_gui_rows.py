@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from order_bot.gui import FAILED_ROW_TAG, ERROR_LOG_TAG, OrderBotApp, RowState, STATUS_DONE, STATUS_FAILED, STATUS_PENDING, parse_gui_args
 from order_bot.models import Order, ScheduleEntry
+from order_bot.time_utils import get_timezone
 
 
 class FakeTable:
@@ -135,6 +136,20 @@ class GuiRowUpdateTests(unittest.TestCase):
 
         self.assertEqual(headers, ["状态", "执行信息", "order_id"])
         self.assertEqual(rows[0], [STATUS_FAILED, "bad", "export-order"])
+
+    def test_timezone_column_includes_offset_prefix(self):
+        app = OrderBotApp.__new__(OrderBotApp)
+        app.table_columns = ["timezone"]
+        app.tz = timezone.utc
+        entry = self.make_entry("timezone-order")
+        entry = ScheduleEntry(
+            order=entry.order,
+            scheduled_at=datetime(2026, 7, 4, 16, 45, tzinfo=get_timezone("Europe/London")),
+            source="run_at",
+        )
+        row = RowState(entry=entry, item_id="item-0", row_key="row-0")
+
+        self.assertEqual(app._row_values(row), ["(+01:00) Europe/London"])
 
     def test_fatal_event_logs_error_without_popup(self):
         app = OrderBotApp.__new__(OrderBotApp)
