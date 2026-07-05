@@ -42,6 +42,24 @@ class CsvLoaderTests(unittest.TestCase):
         self.assertEqual(orders[0].phone, "+441234567890")
         self.assertEqual(orders[0].raw["phone"], "+441234567890")
 
+    def test_product_url_accepts_comma_separated_urls(self):
+        content = "\n".join(
+            [
+                "order_id,run_at,email,product_url,quantity,full_name,country,address_line,city,postal_code,notes",
+                'order-1,,buyer@example.com,"https://example.com/product-a, https://example.com/product-b",1,Test Buyer,United Kingdom,1 Test Street,Birmingham,B1 1BA,',
+            ]
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            csv_path = Path(temp_dir) / "orders.csv"
+            csv_path.write_text(content, encoding="utf-8")
+
+            orders = load_orders(csv_path, get_timezone("Asia/Shanghai"))
+
+        self.assertEqual(
+            orders[0].product_urls,
+            ["https://example.com/product-a", "https://example.com/product-b"],
+        )
+
     def test_run_at_uses_country_timezone_when_enabled(self):
         content = "\n".join(
             [

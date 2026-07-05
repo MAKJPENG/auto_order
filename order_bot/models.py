@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -40,6 +41,10 @@ class Order:
     def value(self, key: str, default: str = "") -> str:
         return self.raw.get(key, default)
 
+    @property
+    def product_urls(self) -> list[str]:
+        return split_product_urls(self.product_url)
+
 
 @dataclass(frozen=True)
 class ScheduleEntry:
@@ -54,3 +59,7 @@ class OrderAttemptResult:
     submitted: bool
     message: str
     details: dict[str, Any] = field(default_factory=dict)
+
+
+def split_product_urls(value: str) -> list[str]:
+    return [part.strip() for part in re.split(r"[,，\n\r]+", value or "") if part.strip()]

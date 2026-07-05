@@ -87,7 +87,7 @@ class DryRunOrderClient:
             success=True,
             submitted=False,
             message="dry-run only; no browser action was taken",
-            details={"order_id": order.order_id, "product_url": order.product_url},
+            details={"order_id": order.order_id, "product_urls": order.product_urls},
         )
 
 
@@ -139,14 +139,24 @@ class BrowserOrderClient:
             )
             context = browser.new_context()
             page = context.new_page()
-            page.goto(order.product_url, wait_until="domcontentloaded", timeout=60000)
-            self._wait_for_product_page(page, PlaywrightTimeoutError)
-
-            self._set_quantity(page, order.quantity)
-
-            if not self._click_add_to_bag(page, PlaywrightTimeoutError):
-                result = self._failure(page, "add-to-bag button did not add product to shopping bag after retries")
+            product_urls = order.product_urls
+            if not product_urls:
+                result = self._failure(page, "product_url is empty")
                 return result
+            for product_index, product_url in enumerate(product_urls, start=1):
+                page.goto(product_url, wait_until="domcontentloaded", timeout=60000)
+                self._wait_for_product_page(page, PlaywrightTimeoutError)
+
+                self._set_quantity(page, order.quantity)
+
+                if not self._click_add_to_bag(page, PlaywrightTimeoutError):
+                    result = self._failure(
+                        page,
+                        f"product {product_index}/{len(product_urls)} add-to-bag did not add product to shopping bag after retries",
+                    )
+                    result.details["product_url"] = product_url
+                    result.details["product_index"] = product_index
+                    return result
 
             if not self._click_checkout_from_bag(page, PlaywrightTimeoutError):
                 result = self._failure(page, "checkout button not found in shopping bag")
@@ -176,7 +186,12 @@ class BrowserOrderClient:
                 if not self._click_place_order(page, PlaywrightTimeoutError):
                     result = self._failure(page, "place-order did not reach confirmation after retries")
                     return result
-                result = OrderAttemptResult(True, True, "order submitted", {"final_url": page.url})
+                result = OrderAttemptResult(
+                    True,
+                    True,
+                    "order submitted",
+                    {"final_url": page.url, "product_count": len(product_urls), "product_urls": product_urls},
+                )
                 return result
 
             page.wait_for_timeout(max(0, self.review_seconds) * 1000)
@@ -184,7 +199,12 @@ class BrowserOrderClient:
                 True,
                 False,
                 "checkout filled; final submit intentionally skipped",
-                {"final_url": page.url, "review_seconds": self.review_seconds},
+                {
+                    "final_url": page.url,
+                    "review_seconds": self.review_seconds,
+                    "product_count": len(product_urls),
+                    "product_urls": product_urls,
+                },
             )
             return result
         except PlaywrightError as exc:

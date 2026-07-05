@@ -85,35 +85,30 @@ class OrderBotApp:
         ttk.Button(config, text="选择文件", command=self.choose_file).grid(row=0, column=2, padx=8, pady=8)
 
         ttk.Label(config, text="随机分配天数").grid(row=1, column=0, sticky="w", padx=8, pady=8)
-        ttk.Spinbox(config, from_=1, to=365, textvariable=self.days, width=8).grid(
-            row=1,
-            column=1,
-            sticky="w",
-            padx=4,
-            pady=8,
-        )
-
-        time_frame = ttk.Frame(config)
-        time_frame.grid(row=1, column=1, sticky="w", padx=100, pady=8)
-        ttk.Label(time_frame, text="随机时间段").pack(side="left")
-        ttk.Entry(time_frame, textvariable=self.window_start, width=8).pack(side="left", padx=(8, 4))
-        ttk.Label(time_frame, text="到").pack(side="left")
-        ttk.Entry(time_frame, textvariable=self.window_end, width=8).pack(side="left", padx=4)
+        schedule_frame = ttk.Frame(config)
+        schedule_frame.grid(row=1, column=1, columnspan=2, sticky="w", padx=4, pady=8)
+        ttk.Spinbox(schedule_frame, from_=1, to=365, textvariable=self.days, width=8).pack(side="left")
+        ttk.Label(schedule_frame, text="随机时间段").pack(side="left", padx=(18, 6))
+        ttk.Entry(schedule_frame, textvariable=self.window_start, width=8).pack(side="left", padx=(0, 4))
+        ttk.Label(schedule_frame, text="到").pack(side="left")
+        ttk.Entry(schedule_frame, textvariable=self.window_end, width=8).pack(side="left", padx=4)
 
         ttk.Label(config, text="执行模式").grid(row=2, column=0, sticky="w", padx=8, pady=8)
+        exec_frame = ttk.Frame(config)
+        exec_frame.grid(row=2, column=1, sticky="w", padx=4, pady=8)
         mode_box = ttk.Combobox(
-            config,
+            exec_frame,
             textvariable=self.mode,
             state="readonly",
             width=22,
             values=("browser", "dry-run"),
         )
-        mode_box.grid(row=2, column=1, sticky="w", padx=4, pady=8)
+        mode_box.pack(side="left")
         ttk.Checkbutton(
-            config,
+            exec_frame,
             text="自动点击下单",
             variable=self.submit_final,
-        ).grid(row=2, column=1, sticky="w", padx=190, pady=8)
+        ).pack(side="left", padx=(14, 0))
 
         option_frame = ttk.Frame(config)
         option_frame.grid(row=2, column=2, sticky="e", padx=8, pady=8)

@@ -4,7 +4,7 @@ import csv
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .models import Order
+from .models import Order, split_product_urls
 from .time_utils import parse_datetime, resolve_order_timezone, timezone_label
 
 
@@ -65,9 +65,13 @@ def _parse_order(row: dict[str, str], line_number: int, tz) -> Order:
     if quantity < 1:
         raise ValueError(f"Line {line_number}: quantity must be greater than 0.")
 
-    parsed_url = urlparse(row["product_url"])
-    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
-        raise ValueError(f"Line {line_number}: product_url must be an http(s) URL.")
+    product_urls = split_product_urls(row["product_url"])
+    if not product_urls:
+        raise ValueError(f"Line {line_number}: product_url is required.")
+    for product_url in product_urls:
+        parsed_url = urlparse(product_url)
+        if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+            raise ValueError(f"Line {line_number}: product_url must contain http(s) URL values.")
 
     row.setdefault("payment_method", "bank_transfer")
     if not row["payment_method"]:

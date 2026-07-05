@@ -83,7 +83,7 @@ python -m playwright install chromium
 - `order_id`：订单编号
 - `run_at`：指定下单时间，可留空。例如 `2026/7/4 16:45`
 - `email`：邮箱
-- `product_url`：产品链接
+- `product_url`：产品链接；同一订单要买多个产品时，用英文逗号分隔多个链接，例如 `"https://example.com/a, https://example.com/b"`，程序会先逐个加入购物车再结账
 - `quantity`：数量
 - `full_name`：收货人姓名
 - `country`：国家或地区
