@@ -62,6 +62,23 @@ CART_CHECKOUT_SELECTORS = [
     "text=Check out",
 ]
 
+PLACE_ORDER_SELECTORS = [
+    "#place_order",
+    "button[name='woocommerce_checkout_place_order']",
+    "button[type='submit']:has-text('Place an order')",
+    "button[type='submit']:has-text('Place order')",
+    "button[type='submit']:has-text('Complete order')",
+    "button[type='submit']:has-text('Pay now')",
+    "button:has-text('Place an order')",
+    "button:has-text('Place order')",
+    "button:has-text('Complete order')",
+    "button:has-text('Pay now')",
+    "text=Place an order",
+    "text=Place order",
+    "text=Complete order",
+    "text=Pay now",
+]
+
 
 class DryRunOrderClient:
     def place_order(self, order: Order) -> OrderAttemptResult:
@@ -150,12 +167,8 @@ class BrowserOrderClient:
                     )
                     return result
                 self._accept_terms(page)
-                if not self._click_place_order(page):
-                    result = self._failure(page, "final place-order button not found")
-                    return result
-                self._quiet_wait_for_network(page, PlaywrightTimeoutError)
-                if not self._wait_for_order_confirmation(page, PlaywrightTimeoutError):
-                    result = self._failure(page, "place-order clicked but confirmation was not detected")
+                if not self._click_place_order(page, PlaywrightTimeoutError):
+                    result = self._failure(page, "place-order did not reach confirmation after retries")
                     return result
                 result = OrderAttemptResult(True, True, "order submitted", {"final_url": page.url})
                 return result
@@ -343,24 +356,12 @@ class BrowserOrderClient:
         return False
 
     def _try_product_button_click(self, page, candidate, timeout_error) -> bool:
-        click_attempts: list[Callable[[], None]] = [
-            lambda: candidate.click(timeout=4000),
-            lambda: candidate.click(timeout=4000, force=True),
-            lambda: self._click_element_center(page, candidate),
-            lambda: self._dispatch_click(candidate),
-        ]
-        for attempt in click_attempts:
-            try:
-                candidate.scroll_into_view_if_needed(timeout=2000)
-            except Exception:
-                pass
-            try:
-                attempt()
-            except Exception:
-                continue
-            page.wait_for_timeout(1000)
-            if self._wait_for_cart_checkout(page, timeout_error, timeout_ms=8000):
-                return True
+        for _ in range(3):
+            if self._click_candidate_with_fallbacks(page, candidate, click_timeout_ms=4000):
+                page.wait_for_timeout(1000)
+                if self._wait_for_cart_checkout(page, timeout_error, timeout_ms=8000):
+                    return True
+            page.wait_for_timeout(700)
         return False
 
     def _click_checkout_from_bag(self, page, timeout_error) -> bool:
@@ -873,17 +874,8 @@ class BrowserOrderClient:
                 candidate = locator.nth(index)
                 if not self._is_visible(candidate) or not self._is_enabled(candidate):
                     continue
-                try:
-                    candidate.scroll_into_view_if_needed(timeout=2000)
-                except Exception:
-                    pass
-                try:
-                    candidate.click(timeout=3000)
-                except Exception:
-                    try:
-                        candidate.click(timeout=3000, force=True)
-                    except Exception:
-                        continue
+                if not self._click_candidate_with_fallbacks(page, candidate, click_timeout_ms=3000):
+                    continue
                 page.wait_for_timeout(300)
                 if self._select_visible_country_option(page, country):
                     page.wait_for_timeout(500)
@@ -908,15 +900,8 @@ class BrowserOrderClient:
                     continue
                 if not self._locator_text_matches_country(candidate, country):
                     continue
-                try:
-                    candidate.click(timeout=3000)
+                if self._click_candidate_with_fallbacks(page, candidate, click_timeout_ms=3000):
                     return self._current_country_matches(page, country)
-                except Exception:
-                    try:
-                        candidate.click(timeout=3000, force=True)
-                        return self._current_country_matches(page, country)
-                    except Exception:
-                        pass
         return False
 
     def _select_detected_country(self, page) -> bool:
@@ -939,13 +924,8 @@ class BrowserOrderClient:
                 candidate = locator.nth(index)
                 if not self._is_visible(candidate) or not self._is_enabled(candidate):
                     continue
-                try:
-                    candidate.click(timeout=3000)
-                except Exception:
-                    try:
-                        candidate.click(timeout=3000, force=True)
-                    except Exception:
-                        continue
+                if not self._click_candidate_with_fallbacks(page, candidate, click_timeout_ms=3000):
+                    continue
                 page.wait_for_timeout(300)
                 if self._click_visible_detected_country_option(page):
                     return True
@@ -974,13 +954,8 @@ class BrowserOrderClient:
                     text = ""
                 if normalize_country_text(text) in {"", "country", "search"}:
                     continue
-                try:
-                    candidate.click(timeout=3000)
-                except Exception:
-                    try:
-                        candidate.click(timeout=3000, force=True)
-                    except Exception:
-                        continue
+                if not self._click_candidate_with_fallbacks(page, candidate, click_timeout_ms=3000):
+                    continue
                 page.wait_for_timeout(500)
                 return self._has_selected_country(page)
         return False
@@ -1139,12 +1114,9 @@ class BrowserOrderClient:
                 candidate = locator.nth(index)
                 if not self._is_visible(candidate):
                     continue
-                try:
-                    candidate.click(timeout=3000, force=True)
+                if self._click_candidate_with_fallbacks(page, candidate, click_timeout_ms=3000):
                     page.wait_for_timeout(300)
                     return True
-                except Exception:
-                    pass
         return False
 
     def _accept_terms(self, page) -> None:
@@ -1156,43 +1128,56 @@ class BrowserOrderClient:
                 except Exception:
                     pass
 
-    def _click_place_order(self, page) -> bool:
-        return self._click_first(
-            page,
-            [
-                "#place_order",
-                "button[name='woocommerce_checkout_place_order']",
-                "button[type='submit']:has-text('Place an order')",
-                "button[type='submit']:has-text('Place order')",
-                "button[type='submit']:has-text('Complete order')",
-                "button[type='submit']:has-text('Pay now')",
-                "button:has-text('Place an order')",
-                "button:has-text('Place order')",
-                "button:has-text('Complete order')",
-                "button:has-text('Pay now')",
-                "text=Place an order",
-                "text=Place order",
-                "text=Complete order",
-                "text=Pay now",
-            ],
-            timeout_ms=10000,
-        )
+    def _click_place_order(self, page, timeout_error) -> bool:
+        if self._wait_for_order_confirmation(page, timeout_error, timeout_ms=1000):
+            return True
+        for attempt in range(5):
+            candidate = self._find_visible_enabled_locator(
+                page,
+                PLACE_ORDER_SELECTORS,
+                timeout_error,
+                timeout_ms=10000 if attempt == 0 else 4000,
+            )
+            if candidate is None:
+                if self._wait_for_order_confirmation(page, timeout_error, timeout_ms=5000):
+                    return True
+                page.wait_for_timeout(1000)
+                continue
+            if self._click_candidate_with_fallbacks(page, candidate, click_timeout_ms=5000):
+                self._quiet_wait_for_network(page, timeout_error)
+                if self._wait_for_order_confirmation(page, timeout_error, timeout_ms=15000):
+                    return True
+            page.wait_for_timeout(1500)
+        return self._wait_for_order_confirmation(page, timeout_error, timeout_ms=10000)
 
-    def _wait_for_order_confirmation(self, page, timeout_error) -> bool:
+    def _wait_for_order_confirmation(self, page, timeout_error, *, timeout_ms: int = 20000) -> bool:
         try:
             page.wait_for_url(
                 lambda url: "checkout" not in url.lower()
                 or "thank" in url.lower()
                 or "success" in url.lower()
-                or "order" in url.lower(),
-                timeout=20000,
+                or "confirmation" in url.lower()
+                or "order-received" in url.lower(),
+                timeout=timeout_ms,
             )
             return True
         except timeout_error:
             pass
-        for text in ["Thank you", "Order confirmed", "Order received", "Payment instructions"]:
+        confirmation_texts = [
+            "Thank you",
+            "Order confirmed",
+            "Order received",
+            "Order number",
+            "order has been received",
+            "Your order has been placed",
+            "Thanks for your order",
+            "We've received your order",
+            "Payment instructions",
+        ]
+        per_text_timeout = max(500, timeout_ms // max(1, len(confirmation_texts)))
+        for text in confirmation_texts:
             try:
-                page.get_by_text(text, exact=False).first.wait_for(state="visible", timeout=3000)
+                page.get_by_text(text, exact=False).first.wait_for(state="visible", timeout=per_text_timeout)
                 return True
             except Exception:
                 pass
@@ -1306,43 +1291,53 @@ class BrowserOrderClient:
             pass
 
     def _click_quantity_button(self, page, selectors: list[str]) -> bool:
-        for selector in selectors:
-            locator = page.locator(selector)
-            count = self._safe_count(locator)
-            for index in range(min(count, 10)):
-                candidate = locator.nth(index)
-                if not self._is_visible(candidate):
-                    continue
-                try:
-                    candidate.click(timeout=2000)
-                    return True
-                except Exception:
-                    pass
-                try:
-                    candidate.click(timeout=2000, force=True)
-                    return True
-                except Exception:
-                    pass
-                try:
-                    self._click_element_center(page, candidate)
-                    return True
-                except Exception:
-                    pass
+        for _ in range(3):
+            for selector in selectors:
+                locator = page.locator(selector)
+                count = self._safe_count(locator)
+                for index in range(min(count, 10)):
+                    candidate = locator.nth(index)
+                    if not self._is_visible(candidate):
+                        continue
+                    if self._click_candidate_with_fallbacks(page, candidate, click_timeout_ms=2000):
+                        return True
+            page.wait_for_timeout(300)
         return False
 
-    def _click_first(self, page, selectors: list[str], *, timeout_ms: int = 8000) -> bool:
-        for selector in selectors:
-            locator = page.locator(selector)
-            count = self._safe_count(locator)
-            for index in range(min(count, 10)):
-                candidate = locator.nth(index)
-                if not self._is_visible(candidate):
-                    continue
+    def _click_first(self, page, selectors: list[str], *, timeout_ms: int = 8000, attempts: int = 3) -> bool:
+        for _ in range(attempts):
+            for selector in selectors:
+                locator = page.locator(selector)
+                count = self._safe_count(locator)
+                for index in range(min(count, 10)):
+                    candidate = locator.nth(index)
+                    if not self._is_visible(candidate) or not self._is_enabled(candidate):
+                        continue
+                    if self._click_candidate_with_fallbacks(page, candidate, click_timeout_ms=timeout_ms):
+                        return True
+            page.wait_for_timeout(500)
+        return False
+
+    def _click_candidate_with_fallbacks(self, page, candidate, *, click_timeout_ms: int, rounds: int = 2) -> bool:
+        for round_index in range(rounds):
+            click_attempts: list[Callable[[], None]] = [
+                lambda: candidate.click(timeout=click_timeout_ms),
+                lambda: candidate.click(timeout=click_timeout_ms, force=True),
+                lambda: self._click_element_center(page, candidate),
+                lambda: self._dispatch_click(candidate),
+            ]
+            for attempt in click_attempts:
                 try:
-                    candidate.click(timeout=timeout_ms)
+                    candidate.scroll_into_view_if_needed(timeout=2000)
+                except Exception:
+                    pass
+                try:
+                    attempt()
                     return True
                 except Exception:
                     pass
+            if round_index < rounds - 1:
+                page.wait_for_timeout(300)
         return False
 
     def _find_visible_enabled_locator(self, page, selectors: list[str], timeout_error, *, timeout_ms: int):

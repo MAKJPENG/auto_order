@@ -144,6 +144,7 @@ python -m order_bot --csv "D:\Tencent\xwechat_files\wxid_3r5n3ilqh0c522_480c\msg
 
 - `logs/schedule.csv`：本次生成的排期
 - `logs/orders.jsonl`：每次执行结果的审计日志
+- 程序运行产生的日志、排期、失败截图和浏览器缓存都会保存在当前运行目录；Windows 安装包快捷方式默认以安装目录作为当前目录。
 
 ## 打包安装程序
 

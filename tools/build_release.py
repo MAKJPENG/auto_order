@@ -479,18 +479,15 @@ def make_inno_script(app_dir: Path, installer_dir: Path, version: str, timestamp
         [Files]
         Source: "{escape_inno_path(app_dir)}\\*"; DestDir: "{{app}}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-        [Dirs]
-        Name: "{{localappdata}}\\{APP_INTERNAL_NAME}"
-
         [Icons]
-        Name: "{{group}}\\{{#MyAppName}}"; Filename: "{{app}}\\{{#MyAppExeName}}"; WorkingDir: "{{localappdata}}\\{APP_INTERNAL_NAME}"
-        Name: "{{autodesktop}}\\{{#MyAppName}}"; Filename: "{{app}}\\{{#MyAppExeName}}"; WorkingDir: "{{localappdata}}\\{APP_INTERNAL_NAME}"; Tasks: desktopicon
+        Name: "{{group}}\\{{#MyAppName}}"; Filename: "{{app}}\\{{#MyAppExeName}}"; WorkingDir: "{{app}}"
+        Name: "{{autodesktop}}\\{{#MyAppName}}"; Filename: "{{app}}\\{{#MyAppExeName}}"; WorkingDir: "{{app}}"; Tasks: desktopicon
 
         [Tasks]
         Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加图标："; Flags: unchecked
 
         [Run]
-        Filename: "{{app}}\\{{#MyAppExeName}}"; Description: "启动 {{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+        Filename: "{{app}}\\{{#MyAppExeName}}"; WorkingDir: "{{app}}"; Description: "启动 {{#MyAppName}}"; Flags: nowait postinstall skipifsilent
         """
     ).strip()
 
@@ -566,6 +563,7 @@ def write_windows_delivery_readme(output_dir: Path, version: str, timestamp: str
             "- pyinstaller-spec：PyInstaller 配置文件。\n"
             "- installer：最终 Windows 安装包输出目录。\n\n"
             "首次使用浏览器下单功能时，程序会自动下载 Playwright Chromium 到当前用户目录，请保持网络可用。\n"
+            "程序运行产生的日志、排期、失败截图和浏览器缓存会保存在程序当前运行目录；安装包快捷方式默认使用安装目录。\n"
         )
     else:
         message = (
@@ -589,6 +587,7 @@ def write_mac_delivery_readme(output_dir: Path, version: str, timestamp: str) ->
         "- pyinstaller-work：PyInstaller 临时构建缓存。\n"
         "- pyinstaller-spec：PyInstaller 配置文件。\n\n"
         "首次使用浏览器下单功能时，程序会自动下载 Playwright Chromium 到当前用户目录，请保持网络可用。\n"
+        "程序运行产生的日志、排期、失败截图和浏览器缓存会保存在程序当前运行目录。\n"
         "Mac 安装包使用固定 bundle/package identifier；安装新版 .pkg 时会按同一个应用覆盖升级旧版。\n"
     )
     (output_dir / "发给别人看这里.txt").write_text(message, encoding="utf-8")
