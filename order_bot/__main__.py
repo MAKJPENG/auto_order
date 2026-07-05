@@ -17,6 +17,12 @@ def main() -> int:
     parser.add_argument("--spread-days", type=int, default=1, help="无 run_at 订单分散的天数")
     parser.add_argument("--start-date", help="随机排期开始日期，例如 2026-07-05")
     parser.add_argument("--timezone", default="Asia/Shanghai", help="时区，默认 Asia/Shanghai")
+    parser.add_argument(
+        "--no-country-timezone",
+        action="store_false",
+        dest="use_country_timezone",
+        help="关闭按国家自动匹配当地时区，改用 --timezone 指定的统一时区",
+    )
     parser.add_argument("--window-start", default="00:00", help="随机时间窗口开始，例如 09:00")
     parser.add_argument("--window-end", default="23:59:59", help="随机时间窗口结束，例如 22:00")
     parser.add_argument("--seed", type=int, help="随机种子，用于复现同一份排期")
@@ -57,7 +63,7 @@ def main() -> int:
     args = parser.parse_args()
 
     tz = get_timezone(args.timezone)
-    orders = load_orders(args.csv, tz)
+    orders = load_orders(args.csv, tz, use_country_timezone=args.use_country_timezone)
     entries = build_schedule(
         orders,
         spread_days=args.spread_days,

@@ -5,7 +5,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .models import Order
-from .time_utils import parse_datetime
+from .time_utils import parse_datetime, resolve_order_timezone, timezone_label
 
 
 REQUIRED_COLUMNS = {
@@ -21,7 +21,7 @@ REQUIRED_COLUMNS = {
 }
 
 
-def load_orders(path: Path, tz) -> list[Order]:
+def load_orders(path: Path, tz, *, use_country_timezone: bool = False) -> list[Order]:
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         if not reader.fieldnames:
@@ -37,7 +37,8 @@ def load_orders(path: Path, tz) -> list[Order]:
             normalized = _normalize_row(row)
             if not any(normalized.values()):
                 continue
-            orders.append(_parse_order(normalized, line_number, tz))
+            row_tz = _row_timezone(normalized, line_number, tz, use_country_timezone)
+            orders.append(_parse_order(normalized, line_number, row_tz))
 
     if not orders:
         raise ValueError("CSV does not contain any orders.")
@@ -85,5 +86,21 @@ def _parse_order(row: dict[str, str], line_number: int, tz) -> Order:
         postal_code=row["postal_code"],
         payment_method=row["payment_method"],
         notes=row.get("notes", ""),
+        phone=row.get("phone", ""),
+        time_zone=timezone_label(tz),
         raw=row,
     )
+
+
+def _row_timezone(row: dict[str, str], line_number: int, default_tz, use_country_timezone: bool):
+    if not use_country_timezone:
+        return default_tz
+    try:
+        return resolve_order_timezone(
+            country=row.get("country", ""),
+            country_code=row.get("country_code", ""),
+            timezone_name=row.get("timezone", "") or row.get("time_zone", ""),
+            default_tz=default_tz,
+        )
+    except ValueError as exc:
+        raise ValueError(f"Line {line_number}: {exc}") from exc

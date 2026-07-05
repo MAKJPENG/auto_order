@@ -16,7 +16,7 @@ from .csv_loader import load_orders
 from .models import Order, OrderAttemptResult, ScheduleEntry
 from .paths import log_dir
 from .scheduler import build_schedule, save_schedule
-from .time_utils import get_timezone, parse_clock
+from .time_utils import get_timezone, parse_clock, timezone_label
 
 
 STATUS_PENDING = "等待下单"
@@ -54,6 +54,7 @@ class OrderBotApp:
         self.submit_final = BooleanVar(value=True)
         self.keep_open_on_failure = BooleanVar(value=False)
         self.allow_detected_country_on_mismatch = BooleanVar(value=False)
+        self.use_country_timezone = BooleanVar(value=True)
         self.past_policy = StringVar(value="skip")
         self.review_seconds = IntVar(value=120)
         self.status_text = StringVar(value="请选择订单 CSV 文件")
@@ -124,6 +125,11 @@ class OrderBotApp:
             width=16,
             values=("bank_transfer", "popular_payments"),
         ).pack(side="left", padx=(8, 14))
+        ttk.Checkbutton(
+            option_frame,
+            text="按国家时区下单",
+            variable=self.use_country_timezone,
+        ).pack(side="left", padx=(0, 14))
         ttk.Checkbutton(
             option_frame,
             text="失败时保留浏览器",
@@ -256,7 +262,7 @@ class OrderBotApp:
         if not csv_file.exists():
             raise ValueError(f"文件不存在：{csv_file}")
 
-        orders = load_orders(csv_file, self.tz)
+        orders = load_orders(csv_file, self.tz, use_country_timezone=self.use_country_timezone.get())
         return build_schedule(
             orders,
             spread_days=int(self.days.get()),
@@ -268,11 +274,13 @@ class OrderBotApp:
     def _display_entries(self, entries: list[ScheduleEntry]) -> None:
         self.rows.clear()
         self.table.delete(*self.table.get_children())
-        raw_columns = list(entries[0].order.raw.keys()) if entries else []
+        computed_columns = {"status", "countdown", "scheduled_at", "timezone", "source", "message"}
+        raw_columns = [column for column in entries[0].order.raw.keys() if column not in computed_columns] if entries else []
         self.table_columns = [
             "status",
             "countdown",
             "scheduled_at",
+            "timezone",
             "source",
             "message",
             *raw_columns,
@@ -283,13 +291,15 @@ class OrderBotApp:
             "status": "状态",
             "countdown": "下单倒计时",
             "scheduled_at": "计划下单时间",
+            "timezone": "当地时区",
             "source": "时间来源",
             "message": "执行信息",
         }
         widths = {
             "status": 100,
             "countdown": 120,
-            "scheduled_at": 220,
+            "scheduled_at": 260,
+            "timezone": 170,
             "source": 80,
             "message": 220,
             "product_url": 360,
@@ -529,6 +539,7 @@ class OrderBotApp:
             "status": row.status,
             "countdown": self._countdown_text(row),
             "scheduled_at": self._format_scheduled_at(row.entry.scheduled_at),
+            "timezone": timezone_label(row.entry.scheduled_at.tzinfo),
             "source": row.entry.source,
             "message": row.message,
         }
@@ -537,7 +548,7 @@ class OrderBotApp:
     def _format_scheduled_at(self, scheduled_at: datetime) -> str:
         if scheduled_at.tzinfo is None:
             scheduled_at = scheduled_at.replace(tzinfo=self.tz)
-        return scheduled_at.astimezone(self.tz).strftime("%Y-%m-%d %H:%M:%S")
+        return scheduled_at.strftime("%Y-%m-%d %H:%M:%S")
 
     def _countdown_text(self, row: RowState) -> str:
         if row.status in {

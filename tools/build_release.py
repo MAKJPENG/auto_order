@@ -21,7 +21,7 @@ MAC_BUNDLE_ID = "com.anxuanfu.auto-order-bot"
 BUILD_CACHE_DIR = ROOT / ".build_cache"
 DEPS_MARKER = BUILD_CACHE_DIR / "requirements.sha256"
 CHROMIUM_MARKER = BUILD_CACHE_DIR / "playwright-chromium.version"
-REQUIRED_IMPORTS = ("playwright", "PyInstaller", "PIL")
+REQUIRED_IMPORTS = ("playwright", "PyInstaller", "PIL", "tzdata")
 
 
 def configure_stdio_encoding() -> None:

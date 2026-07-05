@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from collections import Counter
+from dataclasses import replace
 from datetime import datetime, time
 
 from order_bot.models import Order
@@ -29,6 +30,22 @@ class SchedulerTests(unittest.TestCase):
             notes="",
             raw={},
         )
+
+    def test_random_schedule_uses_order_timezone(self):
+        order = replace(self.make_order(1), time_zone="Europe/London")
+
+        entries = build_schedule(
+            [order],
+            spread_days=1,
+            tz=self.tz,
+            now=datetime(2026, 1, 5, 15, 0, tzinfo=self.tz),
+            window_start=time(9, 0),
+            window_end=time(9, 5),
+            seed=1,
+        )
+
+        self.assertEqual(str(entries[0].scheduled_at.tzinfo), "Europe/London")
+        self.assertEqual(entries[0].scheduled_at.hour, 9)
 
     def test_random_orders_are_evenly_spread(self):
         orders = [self.make_order(index) for index in range(6)]
@@ -65,4 +82,3 @@ class SchedulerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -616,7 +616,7 @@ class BrowserOrderClient:
         )
         self._fill_checkout_field(
             page,
-            order.value("phone"),
+            order.phone or order.value("phone"),
             ["phone", "telephone", "tel"],
             [
                 "input[placeholder='Phone']",

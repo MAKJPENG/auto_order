@@ -61,6 +61,7 @@ python -m playwright install chromium
 - 点击“预览排期”可手动查看每条订单的计划下单时间。
 - 点击“开始下单”后才生成本次随机排期，并显示订单完整表格、秒级计划下单时间、状态、下单倒计时和运行日志。
 - 对 CSV 里已有 `run_at` 的订单，优先使用 `run_at`，不再随机分配。
+- “按国家时区下单”默认开启：`run_at` 和随机时间段都会按订单 `country` 对应的当地时间解释，再自动换算成实际等待时间。
 
 执行模式：
 
@@ -94,7 +95,8 @@ python -m playwright install chromium
 
 可选字段：
 
-- `phone`
+- `phone`：手机号码/联系电话，可留空；填写后会尝试自动填入结账页电话字段
+- `timezone`：时区覆盖，可留空；例如 `America/Los_Angeles`，适合美国、加拿大、澳大利亚等多时区国家
 - `state`
 - `province`
 - `address_line2`

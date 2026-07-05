@@ -19,6 +19,8 @@ class Order:
     postal_code: str
     payment_method: str
     notes: str
+    phone: str = ""
+    time_zone: str = ""
     raw: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -52,4 +54,3 @@ class OrderAttemptResult:
     submitted: bool
     message: str
     details: dict[str, Any] = field(default_factory=dict)
-
