@@ -94,7 +94,7 @@ jobs:
     name: Build macOS Installer
     needs: prepare
     if: ${{ github.event.inputs.target == 'all' || github.event.inputs.target == 'mac' }}
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - name: Checkout source
         uses: actions/checkout@v4

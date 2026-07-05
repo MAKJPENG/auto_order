@@ -256,7 +256,7 @@ def build_mac(output_dir: Path, version: str, timestamp: str) -> None:
             "--clean",
             "--windowed",
             "--name",
-            APP_NAME,
+            APP_INTERNAL_NAME,
             "--icon",
             str(icon_paths["icns"]),
             "--osx-bundle-identifier",
@@ -274,9 +274,15 @@ def build_mac(output_dir: Path, version: str, timestamp: str) -> None:
         env=env,
     )
 
-    app_path = dist_dir / f"{APP_NAME}.app"
+    app_path = dist_dir / f"{APP_INTERNAL_NAME}.app"
     if not app_path.exists():
         raise RuntimeError(f"PyInstaller app not found: {app_path}")
+    display_app_path = dist_dir / f"{APP_NAME}.app"
+    if display_app_path != app_path:
+        if display_app_path.exists():
+            shutil.rmtree(display_app_path)
+        app_path.rename(display_app_path)
+        app_path = display_app_path
 
     pkg_path = output_dir / f"{APP_NAME}-{version}-{timestamp}.pkg"
     run(
@@ -296,20 +302,26 @@ def build_mac(output_dir: Path, version: str, timestamp: str) -> None:
 
     if shutil.which("hdiutil"):
         dmg_path = output_dir / f"{APP_NAME}-{version}-{timestamp}.dmg"
-        run(
-            [
-                "hdiutil",
-                "create",
-                "-volname",
-                APP_NAME,
-                "-srcfolder",
-                str(pkg_path),
-                "-ov",
-                "-format",
-                "UDZO",
-                str(dmg_path),
-            ]
-        )
+        dmg_source_dir = output_dir / "dmg-source"
+        dmg_source_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(pkg_path, dmg_source_dir / pkg_path.name)
+        try:
+            run(
+                [
+                    "hdiutil",
+                    "create",
+                    "-volname",
+                    APP_NAME,
+                    "-srcfolder",
+                    str(dmg_source_dir),
+                    "-ov",
+                    "-format",
+                    "UDZO",
+                    str(dmg_path),
+                ]
+            )
+        except subprocess.CalledProcessError as exc:
+            print(f"DMG creation failed; keeping pkg installer: {exc}")
     write_mac_delivery_readme(output_dir, version, timestamp)
 
 
