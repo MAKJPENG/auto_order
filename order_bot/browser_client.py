@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -37,16 +38,30 @@ ADD_TO_BAG_SELECTORS = [
     "button[data-qa='productsection-btn-addtobag']",
     "button.block-product__button--primary:has-text('Add to bag')",
     "button:has-text('Add to bag')",
+    "button.single_add_to_cart_button[name='add-to-cart']",
     "button.single_add_to_cart_button",
+    "form.cart button.single_add_to_cart_button",
     "button[name='add-to-cart']",
+    "button[type='submit'][name='add-to-cart']",
     "form.cart button[type='submit']",
+    ".single_add_to_cart_button.button.alt",
     "button:has-text('Add to cart')",
     "button:has-text('Add to Cart')",
+    "button:has-text('ADD TO CART')",
     "text=Add to bag",
     "text=Add to cart",
+    "text=ADD TO CART",
 ]
 
 CART_CHECKOUT_SELECTORS = [
+    ".wc-proceed-to-checkout a.checkout-button",
+    ".wc-proceed-to-checkout a[href*='checkout']",
+    "a.checkout-button.button.alt.wc-forward",
+    "p.woocommerce-mini-cart__buttons a.checkout.wc-forward",
+    ".woocommerce-mini-cart__buttons a.checkout",
+    ".widget_shopping_cart_content a.checkout",
+    "a.checkout.wc-forward[href*='checkout']",
+    "a.button.checkout.wc-forward",
     "button[data-qa='shoppingcart-btn-checkout']",
     "[data-qa='shoppingcart-btn-checkout']",
     "[data-qa*='shoppingcart'][data-qa*='checkout']",
@@ -61,6 +76,61 @@ CART_CHECKOUT_SELECTORS = [
     "a:has-text('Checkout')",
     "text=Checkout",
     "text=Check out",
+]
+
+VIEW_CART_SELECTORS = [
+    ".woocommerce-message a.wc-forward:has-text('View cart')",
+    ".woocommerce-message a.button:has-text('View cart')",
+    "a.added_to_cart.wc-forward",
+    "a.button.wc-forward:has-text('View cart')",
+    "a[href*='cart']:has-text('View cart')",
+    "text=View cart",
+]
+
+CART_TOGGLE_SELECTORS = [
+    ".ast-site-header-cart a",
+    ".ast-site-header-cart",
+    ".ast-menu-cart-outline",
+    ".ast-cart-menu-wrap",
+    ".astra-icon.ast-icon-shopping-basket",
+    ".ast-icon-shopping-basket",
+    ".ast-icon.icon-basket",
+    "[data-cart-total]",
+    "a.cart-contents",
+    ".cart-contents",
+    "a[href*='cart'] .astra-icon",
+    "a[href*='cart']",
+    "button:has-text('Cart')",
+    "text=Cart",
+]
+
+CART_ITEM_SELECTORS = [
+    ".woocommerce-mini-cart li.woocommerce-mini-cart-item",
+    ".woocommerce-mini-cart .mini_cart_item",
+    ".widget_shopping_cart_content .mini_cart_item",
+    ".cart_list .mini_cart_item",
+    "[data-qa*='shoppingcart'] [data-qa*='item']",
+]
+
+CART_CLOSE_SELECTORS = [
+    ".astra-cart-drawer-close",
+    ".ast-cart-close",
+    ".ast-icon-close",
+    ".drawer-close",
+    ".cart-drawer-close",
+    "button[aria-label*='Close' i]",
+    "button:has-text('Close')",
+]
+
+ADD_TO_CART_DONE_SELECTORS = [
+    "a.added_to_cart",
+    "a.added_to_cart.wc-forward",
+    ".woocommerce-message a.wc-forward:has-text('View cart')",
+    ".woocommerce-message:has-text('added to your cart')",
+    ".woocommerce-message:has-text('has been added')",
+    ".woocommerce-notices-wrapper:has-text('added')",
+    ".woocommerce-mini-cart__buttons a.checkout",
+    ".widget_shopping_cart_content a.checkout",
 ]
 
 PLACE_ORDER_SELECTORS = [
@@ -149,7 +219,8 @@ class BrowserOrderClient:
 
                 self._set_quantity(page, order.quantity)
 
-                if not self._click_add_to_bag(page, PlaywrightTimeoutError):
+                is_last_product = product_index == len(product_urls)
+                if not self._click_add_to_bag(page, PlaywrightTimeoutError, allow_cart_open=is_last_product):
                     result = self._failure(
                         page,
                         f"product {product_index}/{len(product_urls)} add-to-bag did not add product to shopping bag after retries",
@@ -413,7 +484,7 @@ class BrowserOrderClient:
         self._find_visible_enabled_locator(page, ADD_TO_BAG_SELECTORS, timeout_error, timeout_ms=30000)
         page.wait_for_timeout(500)
 
-    def _click_add_to_bag(self, page, timeout_error) -> bool:
+    def _click_add_to_bag(self, page, timeout_error, *, allow_cart_open: bool = True) -> bool:
         for attempt in range(6):
             candidate = self._find_visible_enabled_locator(
                 page,
@@ -421,24 +492,162 @@ class BrowserOrderClient:
                 timeout_error,
                 timeout_ms=8000 if attempt == 0 else 2500,
             )
-            if candidate is not None and self._try_product_button_click(page, candidate, timeout_error):
+            if candidate is not None and self._try_product_button_click(
+                page,
+                candidate,
+                timeout_error,
+                allow_cart_open=allow_cart_open,
+            ):
                 return True
             page.wait_for_timeout(1000)
         return False
 
-    def _try_product_button_click(self, page, candidate, timeout_error) -> bool:
+    def _try_product_button_click(self, page, candidate, timeout_error, *, allow_cart_open: bool) -> bool:
         for _ in range(3):
+            previous_cart_count = self._cart_total_count(page)
             if self._click_candidate_with_fallbacks(page, candidate, click_timeout_ms=4000):
-                page.wait_for_timeout(1000)
-                if self._wait_for_cart_checkout(page, timeout_error, timeout_ms=8000):
+                if self._wait_for_add_to_cart_completion(
+                    page,
+                    timeout_error,
+                    previous_cart_count,
+                    allow_cart_open=allow_cart_open,
+                ):
                     return True
             page.wait_for_timeout(700)
         return False
 
     def _click_checkout_from_bag(self, page, timeout_error) -> bool:
-        if not self._wait_for_cart_checkout(page, timeout_error, timeout_ms=12000):
+        for attempt in range(5):
+            if self._click_first(page, CART_CHECKOUT_SELECTORS, timeout_ms=5000, attempts=1):
+                return True
+
+            if self._click_view_cart(page, timeout_error):
+                if self._click_first(page, CART_CHECKOUT_SELECTORS, timeout_ms=8000, attempts=3):
+                    return True
+
+            if self._click_first(page, CART_TOGGLE_SELECTORS, timeout_ms=4000, attempts=1):
+                page.wait_for_timeout(1500)
+                if self._click_first(page, CART_CHECKOUT_SELECTORS, timeout_ms=7000, attempts=2):
+                    return True
+                if self._cart_is_empty(page):
+                    self._close_cart_drawer(page)
+                    page.wait_for_timeout(2500)
+                    continue
+
+            if self._wait_for_cart_checkout(page, timeout_error, timeout_ms=3000):
+                if self._click_first(page, CART_CHECKOUT_SELECTORS, timeout_ms=5000, attempts=1):
+                    return True
+
+            page.wait_for_timeout(1500 + attempt * 500)
+        return False
+
+    def _wait_for_add_to_cart_completion(
+        self,
+        page,
+        timeout_error,
+        previous_cart_count: int | None,
+        *,
+        allow_cart_open: bool,
+    ) -> bool:
+        for attempt in range(5):
+            self._quiet_wait_for_network(page, timeout_error)
+            if self._cart_count_increased(previous_cart_count, self._cart_total_count(page)):
+                return True
+            if self._has_visible_any(page, ADD_TO_CART_DONE_SELECTORS + VIEW_CART_SELECTORS):
+                return True
+            if self._wait_for_cart_checkout(page, timeout_error, timeout_ms=1200):
+                return True
+            page.wait_for_timeout(1000 + attempt * 400)
+
+        if not allow_cart_open:
             return False
-        return self._click_first(page, CART_CHECKOUT_SELECTORS, timeout_ms=8000)
+
+        for attempt in range(3):
+            if self._click_first(page, CART_TOGGLE_SELECTORS, timeout_ms=3000, attempts=1):
+                page.wait_for_timeout(1800)
+                if self._cart_count_increased(previous_cart_count, self._cart_total_count(page)):
+                    return True
+                if self._cart_has_items(page) or self._has_visible_any(page, CART_CHECKOUT_SELECTORS):
+                    return True
+                if self._cart_is_empty(page):
+                    self._close_cart_drawer(page)
+                    page.wait_for_timeout(2500)
+                    continue
+            page.wait_for_timeout(1500 + attempt * 500)
+        return False
+
+    def _click_view_cart(self, page, timeout_error) -> bool:
+        if not self._click_first(page, VIEW_CART_SELECTORS, timeout_ms=5000, attempts=2):
+            return False
+        try:
+            page.wait_for_url(lambda url: "cart" in url.lower(), timeout=15000)
+        except timeout_error:
+            pass
+        self._quiet_wait_for_network(page, timeout_error)
+        return self._has_visible_any(page, CART_CHECKOUT_SELECTORS) or "cart" in page.url.lower()
+
+    def _cart_count_increased(self, previous_count: int | None, current_count: int | None) -> bool:
+        if current_count is None:
+            return False
+        if previous_count is None:
+            return current_count > 0
+        return current_count > previous_count
+
+    def _cart_total_count(self, page) -> int | None:
+        for selector in [
+            "[data-cart-total]",
+            ".ast-site-header-cart .count",
+            ".ast-cart-menu-wrap .count",
+            ".cart-contents .count",
+            ".site-header-cart .count",
+        ]:
+            locator = page.locator(selector)
+            count = self._safe_count(locator)
+            for index in range(min(count, 10)):
+                candidate = locator.nth(index)
+                for attr in ["data-cart-total", "data-count", "aria-label"]:
+                    try:
+                        value = candidate.get_attribute(attr, timeout=500)
+                    except Exception:
+                        value = None
+                    parsed = parse_cart_count_value(value)
+                    if parsed is not None:
+                        return parsed
+                try:
+                    text = candidate.inner_text(timeout=500)
+                except Exception:
+                    text = ""
+                parsed = parse_cart_count_value(text)
+                if parsed is not None:
+                    return parsed
+        return None
+
+    def _cart_has_items(self, page) -> bool:
+        cart_count = self._cart_total_count(page)
+        if cart_count is not None and cart_count > 0:
+            return True
+        return self._has_visible_any(page, CART_ITEM_SELECTORS)
+
+    def _cart_is_empty(self, page) -> bool:
+        return self._has_visible_text_any(
+            page,
+            [
+                "Shopping bag is empty",
+                "Your cart is currently empty",
+                "No products in the cart",
+                "Cart is empty",
+            ],
+        )
+
+    def _close_cart_drawer(self, page) -> None:
+        if self._click_first(page, CART_CLOSE_SELECTORS, timeout_ms=1500, attempts=1):
+            page.wait_for_timeout(500)
+            return
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+        page.wait_for_timeout(500)
 
     def _wait_for_cart_checkout(self, page, timeout_error, *, timeout_ms: int = 12000) -> bool:
         for selector in CART_CHECKOUT_SELECTORS:
@@ -446,11 +655,11 @@ class BrowserOrderClient:
                 page.wait_for_selector(selector, state="visible", timeout=timeout_ms)
                 return True
             except timeout_error:
-                if self._has_text(page, "Shopping bag is empty"):
+                if self._cart_is_empty(page):
                     return False
             except Exception:
                 pass
-        return self._has_any(page, CART_CHECKOUT_SELECTORS)
+        return self._has_visible_any(page, CART_CHECKOUT_SELECTORS)
 
     def _wait_for_checkout_page(self, page, timeout_error) -> None:
         try:
@@ -1503,11 +1712,32 @@ class BrowserOrderClient:
     def _has_any(self, page, selectors: list[str]) -> bool:
         return any(self._safe_count(page.locator(selector)) > 0 for selector in selectors)
 
+    def _has_visible_any(self, page, selectors: list[str]) -> bool:
+        for selector in selectors:
+            locator = page.locator(selector)
+            count = self._safe_count(locator)
+            for index in range(min(count, 10)):
+                if self._is_visible(locator.nth(index)):
+                    return True
+        return False
+
     def _has_text(self, page, text: str) -> bool:
         try:
             return page.get_by_text(text, exact=False).count() > 0
         except Exception:
             return False
+
+    def _has_visible_text_any(self, page, texts: list[str]) -> bool:
+        for text in texts:
+            try:
+                locator = page.get_by_text(text, exact=False)
+                count = self._safe_count(locator)
+                for index in range(min(count, 10)):
+                    if self._is_visible(locator.nth(index)):
+                        return True
+            except Exception:
+                pass
+        return False
 
     def _is_visible(self, locator) -> bool:
         try:
@@ -1600,6 +1830,18 @@ def normalize_payment_method(value: str) -> str:
 
 def normalize_country_text(value: str) -> str:
     return " ".join((value or "").strip().casefold().split())
+
+
+def parse_cart_count_value(value: object) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    match = re.search(r"\d+", text)
+    if not match:
+        return None
+    return int(match.group(0))
 
 
 def result_to_dict(result: OrderAttemptResult) -> dict:

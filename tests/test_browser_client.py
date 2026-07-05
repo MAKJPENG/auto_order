@@ -7,7 +7,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from order_bot.browser_client import ADD_TO_BAG_SELECTORS, PLACE_ORDER_SELECTORS, BrowserOrderClient, normalize_country_text
+from order_bot.browser_client import (
+    ADD_TO_BAG_SELECTORS,
+    CART_CHECKOUT_SELECTORS,
+    CART_TOGGLE_SELECTORS,
+    PLACE_ORDER_SELECTORS,
+    VIEW_CART_SELECTORS,
+    BrowserOrderClient,
+    normalize_country_text,
+    parse_cart_count_value,
+)
 
 
 class BrowserClientConfigTests(unittest.TestCase):
@@ -82,6 +91,17 @@ class BrowserClientConfigTests(unittest.TestCase):
     def test_place_order_selectors_cover_foenix_checkout_button(self):
         self.assertIn("button[type='submit']:has-text('Place an order')", PLACE_ORDER_SELECTORS)
         self.assertIn("button:has-text('Place an order')", PLACE_ORDER_SELECTORS)
+
+    def test_woocommerce_product_and_cart_selectors_are_supported(self):
+        self.assertIn("button.single_add_to_cart_button[name='add-to-cart']", ADD_TO_BAG_SELECTORS)
+        self.assertIn(".woocommerce-message a.wc-forward:has-text('View cart')", VIEW_CART_SELECTORS)
+        self.assertIn(".wc-proceed-to-checkout a.checkout-button", CART_CHECKOUT_SELECTORS)
+        self.assertIn(".astra-icon.ast-icon-shopping-basket", CART_TOGGLE_SELECTORS)
+
+    def test_cart_count_parser_supports_astra_data_attribute(self):
+        self.assertEqual(parse_cart_count_value("2"), 2)
+        self.assertEqual(parse_cart_count_value("Cart 12 items"), 12)
+        self.assertIsNone(parse_cart_count_value(""))
 
 
 if __name__ == "__main__":
