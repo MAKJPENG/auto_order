@@ -198,8 +198,8 @@ class OrderBotApp:
         try:
             entries = self._load_schedule()
         except Exception as exc:
-            messagebox.showerror("无法生成排期", str(exc))
             self.status_text.set("排期失败")
+            self._append_log(f"排期失败：{exc}", level=ERROR_LOG_TAG)
             return
 
         self._display_entries(entries)
@@ -207,8 +207,8 @@ class OrderBotApp:
         try:
             save_schedule(entries, schedule_path)
         except Exception as exc:
-            messagebox.showerror("无法保存排期", f"排期已生成，但保存到文件失败：{exc}")
-            self._append_log(f"排期保存失败：{exc}")
+            self.status_text.set("排期保存失败")
+            self._append_log(f"排期保存失败：{exc}", level=ERROR_LOG_TAG)
             return
         self.status_text.set(f"已生成排期，共 {len(entries)} 条")
         self._append_log(f"排期已生成：{schedule_path}")
@@ -221,7 +221,8 @@ class OrderBotApp:
         try:
             entries = self._load_schedule()
         except Exception as exc:
-            messagebox.showerror("无法开始", str(exc))
+            self.status_text.set("无法开始")
+            self._append_log(f"无法开始：{exc}", level=ERROR_LOG_TAG)
             return
 
         self._display_entries(entries)
@@ -229,9 +230,8 @@ class OrderBotApp:
         try:
             save_schedule(entries, schedule_path)
         except Exception as exc:
-            messagebox.showerror("无法开始", f"排期保存失败，任务未启动：{exc}")
             self.status_text.set("排期保存失败")
-            self._append_log(f"排期保存失败，任务未启动：{exc}")
+            self._append_log(f"排期保存失败，任务未启动：{exc}", level=ERROR_LOG_TAG)
             return
         self.stop_event.clear()
         self.start_button.configure(state="disabled")
@@ -277,7 +277,7 @@ class OrderBotApp:
         try:
             self._write_progress_csv(path)
         except Exception as exc:
-            messagebox.showerror("导出失败", f"订单进度导出失败：{exc}")
+            self.status_text.set("订单进度导出失败")
             self._append_log(f"订单进度导出失败：{exc}", level=ERROR_LOG_TAG)
             return
 
@@ -415,10 +415,16 @@ class OrderBotApp:
                         )
                         continue
                     if past_policy == "error":
-                        raise RuntimeError(
-                            f"{entry.order.order_id} 的 run_at 已过期："
-                            f"{entry.scheduled_at.isoformat(sep=' ', timespec='seconds')}"
+                        self._emit(
+                            "failed",
+                            row_key=row_key,
+                            order_id=entry.order.order_id,
+                            message=(
+                                "run_at 已过期："
+                                f"{entry.scheduled_at.isoformat(sep=' ', timespec='seconds')}"
+                            ),
                         )
+                        continue
 
                 self._wait_until(entry.scheduled_at, row_key, entry.order.order_id)
                 if self.stop_event.is_set():
@@ -542,10 +548,9 @@ class OrderBotApp:
             self._append_log(message)
         elif event == "fatal":
             self.status_text.set("任务出错")
-            self._append_log(f"任务出错：{message}")
+            self._append_log(f"任务出错：{message}", level=ERROR_LOG_TAG)
             if payload.get("traceback"):
-                self._append_log(payload["traceback"])
-            messagebox.showerror("任务出错", message)
+                self._append_log(payload["traceback"], level=ERROR_LOG_TAG)
         elif event == "worker_done":
             self.start_button.configure(state="normal")
             self.stop_button.configure(state="disabled")

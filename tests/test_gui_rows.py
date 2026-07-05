@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import unittest
+import queue
+import threading
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from order_bot.gui import FAILED_ROW_TAG, ERROR_LOG_TAG, OrderBotApp, RowState, STATUS_DONE, STATUS_FAILED, STATUS_PENDING, parse_gui_args
 from order_bot.models import Order, ScheduleEntry
@@ -32,6 +35,25 @@ class FakeLog:
 
     def see(self, _index):
         pass
+
+
+class FakeVar:
+    def __init__(self, value=""):
+        self.value = value
+
+    def set(self, value):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+
+class FakeProgress:
+    def __init__(self):
+        self.kwargs = {}
+
+    def configure(self, **kwargs):
+        self.kwargs.update(kwargs)
 
 
 class GuiRowUpdateTests(unittest.TestCase):
@@ -113,6 +135,55 @@ class GuiRowUpdateTests(unittest.TestCase):
 
         self.assertEqual(headers, ["状态", "执行信息", "order_id"])
         self.assertEqual(rows[0], [STATUS_FAILED, "bad", "export-order"])
+
+    def test_fatal_event_logs_error_without_popup(self):
+        app = OrderBotApp.__new__(OrderBotApp)
+        app.tz = timezone.utc
+        app.status_text = FakeVar()
+        app.log = FakeLog()
+        app.rows = []
+        app.progress = FakeProgress()
+        app.progress_text = FakeVar()
+        app.stop_event = threading.Event()
+
+        with patch("order_bot.gui.messagebox.showerror") as showerror:
+            app._handle_event("fatal", {"message": "boom", "traceback": "Traceback demo"})
+
+        showerror.assert_not_called()
+        self.assertEqual(app.status_text.get(), "任务出错")
+        self.assertEqual(app.log.inserted[0][1], ERROR_LOG_TAG)
+        self.assertEqual(app.log.inserted[1][1], ERROR_LOG_TAG)
+
+    def test_past_run_at_error_emits_failed_event(self):
+        app = OrderBotApp.__new__(OrderBotApp)
+        app.events = queue.Queue()
+        app.stop_event = threading.Event()
+        entry = self.make_entry("past-order")
+        entry = ScheduleEntry(
+            order=entry.order,
+            scheduled_at=datetime(2000, 1, 1, 12, 0, tzinfo=timezone.utc),
+            source="run_at",
+        )
+
+        app._run_worker(
+            entries=[entry],
+            mode="dry-run",
+            submit_final=False,
+            payment_method="bank_transfer",
+            keep_open_on_failure=False,
+            allow_detected_country_on_mismatch=False,
+            past_policy="error",
+            review_seconds=0,
+        )
+
+        events = []
+        while not app.events.empty():
+            events.append(app.events.get_nowait())
+
+        self.assertEqual(events[0][0], "failed")
+        self.assertEqual(events[0][1]["order_id"], "past-order")
+        self.assertIn("run_at 已过期", events[0][1]["message"])
+        self.assertEqual(events[-1][0], "worker_done")
 
 
 if __name__ == "__main__":
