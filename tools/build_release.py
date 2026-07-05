@@ -76,7 +76,7 @@ def main() -> int:
         if bundled_browser_targets:
             install_playwright_browser()
         else:
-            print("Skip bundled Playwright Chromium for macOS; the packaged app installs it on first browser use.")
+            print("Skip bundled Playwright Chromium; the packaged app installs it on first browser use.")
     if targets and not buildable_targets:
         print("No selected target can be built on this operating system; writing notes only.")
 
@@ -114,7 +114,7 @@ def target_supported_here(target: str) -> bool:
 
 
 def should_bundle_playwright_browser(target: str) -> bool:
-    return target == "windows"
+    return False
 
 
 def read_version() -> str:
@@ -223,9 +223,9 @@ def build_windows(output_dir: Path, version: str, timestamp: str) -> None:
     spec_dir = output_dir / "pyinstaller-spec"
     installer_dir = output_dir / "installer"
     installer_dir.mkdir(parents=True, exist_ok=True)
+    remove_packaged_playwright_browsers()
 
     env = os.environ.copy()
-    env["PLAYWRIGHT_BROWSERS_PATH"] = "0"
     run(
         [
             sys.executable,
@@ -564,7 +564,8 @@ def write_windows_delivery_readme(output_dir: Path, version: str, timestamp: str
             "- pyinstaller-dist：PyInstaller 生成的可运行程序目录。\n"
             "- pyinstaller-work：PyInstaller 临时构建缓存。\n"
             "- pyinstaller-spec：PyInstaller 配置文件。\n"
-            "- installer：最终 Windows 安装包输出目录。\n"
+            "- installer：最终 Windows 安装包输出目录。\n\n"
+            "首次使用浏览器下单功能时，程序会自动下载 Playwright Chromium 到当前用户目录，请保持网络可用。\n"
         )
     else:
         message = (

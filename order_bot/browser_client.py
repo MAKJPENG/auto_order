@@ -202,11 +202,8 @@ class BrowserOrderClient:
 
     def _configure_packaged_playwright(self) -> None:
         if getattr(sys, "frozen", False):
-            if sys.platform == "darwin":
-                browser_dir = app_data_dir() / "playwright-browsers"
-                os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browser_dir)
-            else:
-                os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
+            browser_dir = app_data_dir() / "playwright-browsers"
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browser_dir)
 
     def _ensure_playwright_browser(self, playwright) -> None:
         executable_path = Path(playwright.chromium.executable_path)

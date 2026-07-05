@@ -18,6 +18,10 @@ class BuildReleaseTests(unittest.TestCase):
         self.assertIn(f"AppId={{{{{build_release.WINDOWS_APP_ID}}}", script)
         self.assertNotIn(f"AppId={{{build_release.WINDOWS_APP_ID}}}", script)
 
+    def test_installers_do_not_bundle_playwright_browser(self):
+        self.assertFalse(build_release.should_bundle_playwright_browser("windows"))
+        self.assertFalse(build_release.should_bundle_playwright_browser("mac"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -158,9 +158,9 @@ build/YYYYMMDD-HHMMSS/mac
 
 注意：Windows 电脑只能生成 Windows 安装包；Mac 电脑只能生成 Mac 安装包。不能在 Windows 下直接生成可安装的 Mac `.pkg/.dmg`，因为 macOS 的 `.app`、`pkgbuild`、`hdiutil` 都必须在 macOS 上运行。
 
-打包依赖和 Chromium 浏览器通常只需要第一次下载。后续再次执行打包会复用 `.venv` 里已经安装的依赖和 Playwright Chromium；只有删除 `.venv`、更换电脑、升级 Playwright 需要新的浏览器版本，或手动清理缓存时才会重新下载。
+打包依赖通常只需要第一次下载，后续再次执行打包会复用 `.venv` 里已经安装的依赖。安装包不内嵌 Chromium 浏览器，用户首次使用浏览器下单功能时会自动下载到当前用户目录。
 
-注意：如果 Chromium 下载中途失败，例如网络断开或服务端关闭连接，失败的半包不会算缓存；下一次打包仍会重新下载，直到完整下载成功为止。完整成功一次后，脚本会写入 `.build_cache` 标记，后续不会反复下载。
+注意：如果用户首次运行时 Chromium 下载中途失败，例如网络断开或服务端关闭连接，下一次使用浏览器功能仍会重新下载，直到完整下载成功为止。
 
 Windows 打包：
 
@@ -169,6 +169,8 @@ Windows 打包：
 ```
 
 要求本机安装 Inno Setup 6，用于生成可安装的 `.exe` 安装包。安装包使用固定 `AppId`，再次运行新版安装包会覆盖升级旧版程序。
+
+Windows 安装包不把 Chromium 浏览器本体塞进安装程序，首次使用浏览器下单功能时会自动下载到当前用户目录，请保持网络可用。
 
 Windows 最终发给别人的是：
 
@@ -220,7 +222,7 @@ build/YYYYMMDD-HHMMSS/mac/自动下单机器人-版本号-时间戳.pkg
 - `自动下单机器人-Windows-安装包-时间戳`：里面是 Windows `.exe` 安装包。
 - `自动下单机器人-macOS-安装包-时间戳`：里面是 Mac `.pkg`，如果生成了 `.dmg` 也会一起放进去。
 
-GitHub Actions 已配置缓存：依赖成功下载一次后，后续通常会复用缓存。Windows 安装包会打进 Playwright Chromium；Mac 安装包会在用户首次使用浏览器功能时自动下载 Chromium，避免 macOS 打包阶段处理浏览器可执行文件失败。
+GitHub Actions 已配置缓存：依赖成功下载一次后，后续通常会复用缓存。Windows 和 Mac 安装包都会在用户首次使用浏览器功能时自动下载 Chromium，避免打包阶段处理浏览器深层目录或可执行文件失败。
 
 自动发布的 Release 标签格式为 `installers-YYYYMMDD-HHMMSS`，里面会直接附上 `.exe`、`.pkg`、`.dmg` 等安装文件。
 
