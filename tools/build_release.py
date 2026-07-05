@@ -452,7 +452,7 @@ def make_inno_script(app_dir: Path, installer_dir: Path, version: str, timestamp
         #define MyAppExeName "{APP_NAME}.exe"
 
         [Setup]
-        AppId={{{WINDOWS_APP_ID}}}
+        AppId={{{{{WINDOWS_APP_ID}}}
         AppName={{#MyAppName}}
         AppVersion={{#MyAppVersion}}
         AppVerName={{#MyAppName}} {{#MyAppVersion}}
