@@ -93,6 +93,42 @@ class EmailTemplatesTests(unittest.TestCase):
         self.assertIn("VAT发票邮件的邮件模板文件和附件PDF文件只能二选一，不能同时上传。", both_result.errors)
         self.assertTrue(pdf_result.ok)
 
+    def test_vat_invoice_pdf_mode_still_requires_data_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pdf_file = root / "invoice.pdf"
+            pdf_file.write_bytes(b"%PDF-1.4\n")
+
+            result = validate_email_task(
+                email_type=EMAIL_TYPE_VAT_INVOICE,
+                data_file=None,
+                template_file=None,
+                attachment_file=pdf_file,
+            )
+
+        self.assertFalse(result.ok)
+        self.assertIn("所有邮件类型都必须上传数据文件。", result.errors)
+
+    def test_non_vat_email_requires_data_file_and_template_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_file = root / "data.csv"
+            data_file.write_text(
+                "email,run_at,订单号,商品描述,数量,含VAT总价\n"
+                "buyer@example.com,2026-07-05 10:00,ORD-1,Bracelet,2,£100\n",
+                encoding="utf-8-sig",
+            )
+
+            result = validate_email_task(
+                email_type=EMAIL_TYPE_ORDER_CONFIRMATION,
+                data_file=data_file,
+                template_file=None,
+                attachment_file=None,
+            )
+
+        self.assertFalse(result.ok)
+        self.assertIn("订单确认邮件 必须上传邮件模板文件。", result.errors)
+
     def test_custom_template_warns_missing_optional_data_but_keeps_placeholder(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

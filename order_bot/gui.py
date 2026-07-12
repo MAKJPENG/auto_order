@@ -246,7 +246,7 @@ class EmailApp:
 
         ttk.Label(task_frame, text="数据文件").grid(row=2, column=0, sticky="w", padx=8, pady=6)
         ttk.Entry(task_frame, textvariable=self.data_file).grid(row=2, column=1, columnspan=2, sticky="ew", padx=4, pady=6)
-        ttk.Button(task_frame, text="选择数据", command=self.choose_email_data_file).grid(row=2, column=3, sticky="e", padx=8, pady=6)
+        ttk.Button(task_frame, text="选择数据文件（必选）", command=self.choose_email_data_file).grid(row=2, column=3, sticky="e", padx=8, pady=6)
 
         ttk.Label(task_frame, text="邮件模板").grid(row=3, column=0, sticky="w", padx=8, pady=6)
         ttk.Entry(task_frame, textvariable=self.template_file).grid(row=3, column=1, sticky="ew", padx=4, pady=6)
@@ -311,9 +311,9 @@ class EmailApp:
             self.email_subject.set(default_email_subject(email_type))
         self.template_hint.set(placeholder_hint(email_type))
         if email_type == EMAIL_TYPE_VAT_INVOICE:
-            self._append_email_log("VAT发票邮件：邮件模板文件和附件PDF文件二选一。")
+            self._append_email_log("VAT发票邮件：数据文件必选；邮件模板文件和附件PDF文件二选一。")
         elif email_type in {EMAIL_TYPE_ORDER_CONFIRMATION, EMAIL_TYPE_SHIPPING_CONFIRMATION, EMAIL_TYPE_CUSTOM}:
-            self._append_email_log(f"{email_type}：必须上传邮件模板文件，变量格式使用 {{{{变量名}}}}。")
+            self._append_email_log(f"{email_type}：数据文件和邮件模板文件都必选，变量格式使用 {{{{变量名}}}}。")
 
     def choose_email_data_file(self) -> None:
         filename = filedialog.askopenfilename(

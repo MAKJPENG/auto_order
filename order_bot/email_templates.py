@@ -111,10 +111,15 @@ def email_type_names() -> tuple[str, ...]:
 def placeholder_hint(email_type: str) -> str:
     spec = EMAIL_TYPE_SPECS[email_type]
     if email_type == EMAIL_TYPE_CUSTOM:
-        return "自定义邮件变量格式：{{列表文件列名}}，例如 {{客户姓名}}。"
+        return "所有邮件类型都必须选择数据文件。自定义邮件变量格式：{{列表文件列名}}，例如 {{客户姓名}}。"
+    if email_type == EMAIL_TYPE_VAT_INVOICE:
+        return (
+            "VAT发票邮件必须选择数据文件；邮件模板文件和附件PDF文件二选一。"
+            "如使用邮件模板，变量格式：{{变量名}}。"
+        )
     required = "、".join(item.name for item in spec.variables if item.required)
     optional = "、".join(item.name for item in spec.variables if not item.required) or "无"
-    return f"变量格式：{{{{变量名}}}}。必填：{required}。非必填：{optional}。"
+    return f"所有邮件类型都必须选择数据文件。变量格式：{{{{变量名}}}}。必填：{required}。非必填：{optional}。"
 
 
 def extract_placeholders(template_text: str) -> list[str]:
@@ -168,7 +173,7 @@ def validate_email_task(
         if has_template and has_attachment:
             errors.append("VAT发票邮件的邮件模板文件和附件PDF文件只能二选一，不能同时上传。")
         if not has_template and not has_attachment:
-            errors.append("VAT发票邮件必须上传邮件模板文件或附件PDF文件中的一个。")
+            errors.append("VAT发票邮件必须上传邮件模板文件或附件PDF文件中的一个，同时仍需上传数据文件。")
         if has_attachment and attachment_file and attachment_file.suffix.lower() != ".pdf":
             errors.append("VAT发票邮件选择附件时，附件必须是 PDF 文件。")
     elif not has_template:
@@ -229,7 +234,7 @@ def normalize_key(value: str) -> str:
 
 def _load_data_file_or_error(path: Path | None, errors: list[str]) -> EmailDataTable | None:
     if not path:
-        errors.append("必须上传数据文件。")
+        errors.append("所有邮件类型都必须上传数据文件。")
         return None
     if not path.exists():
         errors.append(f"数据文件不存在：{path}")
