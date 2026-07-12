@@ -43,6 +43,69 @@ class RowState:
     message: str = ""
 
 
+class ModeSelectionApp:
+    def __init__(self, root: Tk):
+        self.root = root
+        self.root.title("自动下单机器人")
+        self.root.geometry("420x220")
+        self.root.minsize(360, 180)
+        self._build_layout()
+
+    def _build_layout(self) -> None:
+        outer = ttk.Frame(self.root, padding=28)
+        outer.pack(fill="both", expand=True)
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(0, weight=1)
+        outer.rowconfigure(1, weight=1)
+
+        ttk.Button(outer, text="去下单", command=self._open_order_app).grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+            pady=(0, 12),
+        )
+        ttk.Button(outer, text="发邮件", command=self._open_email_app).grid(
+            row=1,
+            column=0,
+            sticky="nsew",
+        )
+
+    def _open_order_app(self) -> None:
+        clear_root(self.root)
+        OrderBotApp(self.root)
+
+    def _open_email_app(self) -> None:
+        clear_root(self.root)
+        EmailApp(self.root)
+
+
+class EmailApp:
+    def __init__(self, root: Tk):
+        self.root = root
+        self.root.title("自动发送邮件")
+        self.root.geometry("760x480")
+        self.root.minsize(560, 360)
+        self._build_layout()
+
+    def _build_layout(self) -> None:
+        outer = ttk.Frame(self.root, padding=24)
+        outer.pack(fill="both", expand=True)
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(1, weight=1)
+
+        ttk.Label(
+            outer,
+            text="邮件功能界面已预留，后续会在这里配置邮箱、模板和发送任务。",
+            anchor="center",
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 16))
+        ttk.Frame(outer).grid(row=1, column=0, sticky="nsew")
+        ttk.Button(outer, text="返回", command=self._back).grid(row=2, column=0, sticky="e")
+
+    def _back(self) -> None:
+        clear_root(self.root)
+        ModeSelectionApp(self.root)
+
+
 class OrderBotApp:
     def __init__(self, root: Tk):
         self.root = root
@@ -679,6 +742,11 @@ def format_seconds(seconds: int) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
+def clear_root(root: Tk) -> None:
+    for child in root.winfo_children():
+        child.destroy()
+
+
 def parse_gui_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Open the order bot desktop UI.")
     parser.add_argument("--self-test", action="store_true", help="Import-check only.")
@@ -692,7 +760,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     root = Tk()
-    OrderBotApp(root)
+    ModeSelectionApp(root)
     root.mainloop()
     return 0
 
