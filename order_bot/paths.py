@@ -7,6 +7,19 @@ from pathlib import Path
 APP_DATA_DIR_NAME = "AutoOrderBot"
 
 
+def install_dir() -> Path:
+    override = os.environ.get("AUTO_ORDER_BOT_INSTALL_DIR")
+    if override:
+        return Path(override).expanduser()
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path.cwd()
+
+
+def install_preview_dir() -> Path:
+    return install_dir() / "email_previews"
+
+
 def app_data_dir() -> Path:
     override = os.environ.get("AUTO_ORDER_BOT_DATA_DIR")
     if override:

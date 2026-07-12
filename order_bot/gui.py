@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import queue
 import threading
 import traceback
+import webbrowser
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -30,6 +32,7 @@ from .email_tasks import (
     default_email_subject,
     send_email_message,
 )
+from .email_preview import build_email_preview_page
 from .email_templates import (
     EMAIL_TYPE_CUSTOM,
     EMAIL_TYPE_ORDER_CONFIRMATION,
@@ -40,7 +43,7 @@ from .email_templates import (
     validate_email_task,
 )
 from .models import Order, OrderAttemptResult, ScheduleEntry
-from .paths import log_dir
+from .paths import install_preview_dir, log_dir
 from .scheduler import build_schedule, save_schedule
 from .time_utils import get_timezone, parse_clock, timezone_label
 
@@ -155,8 +158,11 @@ class EmailApp:
         self.status_text = StringVar(value="请选择或登录邮箱")
         self.email_progress_text = StringVar(value="0/0")
         self.tz = get_timezone("Asia/Shanghai")
+        self.email_preview_dir = install_preview_dir()
+        self.email_preview_files: set[Path] = set()
         self.email_rows: list[EmailRowState] = []
         self.email_table_columns: list[str] = []
+        self.root.protocol("WM_DELETE_WINDOW", self._close_window)
         self._build_layout()
         self._refresh_saved_accounts()
         self._poll_login_events()
@@ -272,8 +278,9 @@ class EmailApp:
         task_actions.grid(row=6, column=0, columnspan=4, sticky="ew", padx=8, pady=(4, 10))
         ttk.Checkbutton(task_actions, text="按地区/时区发送", variable=self.use_region_timezone).pack(side="left", padx=(0, 12))
         ttk.Button(task_actions, text="校验并预览", command=self.validate_current_email_task).pack(side="left")
+        ttk.Button(task_actions, text="预览邮件", command=self.preview_email_template).pack(side="left", padx=8)
         self.start_email_button = ttk.Button(task_actions, text="开始发送", command=self.start_email_tasks)
-        self.start_email_button.pack(side="left", padx=8)
+        self.start_email_button.pack(side="left")
         self.stop_email_button = ttk.Button(task_actions, text="停止等待", command=self.stop_email_tasks, state="disabled")
         self.stop_email_button.pack(side="left")
         ttk.Button(task_actions, text="导出任务日志", command=self.export_email_progress).pack(side="left", padx=8)
@@ -375,6 +382,80 @@ class EmailApp:
             if len(preview) > 1200:
                 preview = preview[:1200] + "\n...（预览已截断）"
             self._append_email_log("第一行数据预览：\n" + preview)
+
+    def preview_email_template(self) -> None:
+        data_file = self._optional_path(self.data_file.get())
+        template_file = self._optional_path(self.template_file.get())
+        if data_file is None:
+            self._append_email_log("预览失败：请选择邮件数据文件。", level=ERROR_LOG_TAG)
+            return
+        if template_file is None:
+            self._append_email_log("预览失败：请选择邮件模板文件。", level=ERROR_LOG_TAG)
+            return
+
+        result = validate_email_task(
+            email_type=self.mail_type.get(),
+            data_file=data_file,
+            template_file=template_file,
+            attachment_file=None,
+        )
+        if not result.ok:
+            self.status_text.set("邮件预览校验失败")
+            for error in result.errors:
+                self._append_email_log(error, level=ERROR_LOG_TAG)
+            for warning in result.warnings:
+                self._append_email_log(f"提示：{warning}")
+            return
+
+        try:
+            self._cleanup_email_preview_files(include_stale=True)
+            preview = build_email_preview_page(
+                email_type=self.mail_type.get(),
+                data_file=data_file,
+                template_file=template_file,
+                subject_template=self.email_subject.get() or default_email_subject(self.mail_type.get()),
+                output_dir=self.email_preview_dir,
+            )
+        except Exception as exc:
+            self.status_text.set("邮件预览生成失败")
+            self._append_email_log(f"邮件预览生成失败：{exc}", level=ERROR_LOG_TAG)
+            return
+
+        self.email_preview_files.add(preview.path)
+        self.status_text.set(f"邮件预览已生成，共 {preview.count} 条")
+        self._append_email_log(f"邮件预览已生成：{preview.path}")
+        self._append_email_log("预览页面默认显示第一条数据，可用上一条/下一条切换。")
+        self._open_email_preview_file(preview.path)
+
+    def _open_email_preview_file(self, path: Path) -> None:
+        try:
+            if hasattr(os, "startfile"):
+                os.startfile(str(path))  # type: ignore[attr-defined]
+            else:
+                webbrowser.open(path.as_uri())
+        except Exception as exc:
+            self._append_email_log(f"自动打开预览失败：{exc}", level=ERROR_LOG_TAG)
+            self._append_email_log(f"请手动打开预览文件：{path}")
+
+    def _cleanup_email_preview_files(self, *, include_stale: bool = False) -> None:
+        paths = set(self.email_preview_files)
+        if include_stale and self.email_preview_dir.exists():
+            paths.update(self.email_preview_dir.glob("email-preview-*.html"))
+
+        for path in sorted(paths):
+            try:
+                if path.exists():
+                    path.unlink()
+            except OSError as exc:
+                self._append_email_log(f"预览文件清理失败：{path}，{exc}", level=ERROR_LOG_TAG)
+            else:
+                self.email_preview_files.discard(path)
+
+        try:
+            if self.email_preview_dir.exists() and not any(self.email_preview_dir.iterdir()):
+                self.email_preview_dir.rmdir()
+        except OSError:
+            pass
 
     def _optional_path(self, value: str) -> Path | None:
         value = (value or "").strip()
@@ -903,8 +984,16 @@ class EmailApp:
     def _back(self) -> None:
         self.closed = True
         self.email_stop_event.set()
+        self._cleanup_email_preview_files(include_stale=True)
+        self.root.protocol("WM_DELETE_WINDOW", self.root.destroy)
         clear_root(self.root)
         ModeSelectionApp(self.root)
+
+    def _close_window(self) -> None:
+        self.closed = True
+        self.email_stop_event.set()
+        self._cleanup_email_preview_files(include_stale=True)
+        self.root.destroy()
 
 
 class OrderBotApp:

@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from order_bot.paths import app_data_dir, browser_cache_dir
+from order_bot.paths import app_data_dir, browser_cache_dir, install_dir, install_preview_dir
 
 
 class PathsTests(unittest.TestCase):
@@ -17,6 +17,33 @@ class PathsTests(unittest.TestCase):
                 os.environ.pop("AUTO_ORDER_BOT_DATA_DIR", None)
 
                 self.assertEqual(app_data_dir(), Path(temp_dir))
+
+    def test_install_dir_defaults_to_current_directory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(os.environ, {}, clear=False), patch("pathlib.Path.cwd", return_value=Path(temp_dir)):
+                os.environ.pop("AUTO_ORDER_BOT_INSTALL_DIR", None)
+
+                self.assertEqual(install_dir(), Path(temp_dir))
+
+    def test_install_dir_can_be_overridden(self):
+        with patch.dict(os.environ, {"AUTO_ORDER_BOT_INSTALL_DIR": r"D:\AutoOrderInstall"}):
+            self.assertEqual(install_dir(), Path(r"D:\AutoOrderInstall"))
+
+    def test_packaged_app_install_dir_uses_executable_parent(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            executable = Path(temp_dir) / "自动下单机器人.exe"
+            with (
+                patch.object(sys, "frozen", True, create=True),
+                patch.object(sys, "executable", str(executable)),
+                patch.dict(os.environ, {}, clear=False),
+            ):
+                os.environ.pop("AUTO_ORDER_BOT_INSTALL_DIR", None)
+
+                self.assertEqual(install_dir(), Path(temp_dir).resolve())
+
+    def test_install_preview_dir_is_under_install_dir(self):
+        with patch.dict(os.environ, {"AUTO_ORDER_BOT_INSTALL_DIR": r"D:\AutoOrderInstall"}):
+            self.assertEqual(install_preview_dir(), Path(r"D:\AutoOrderInstall") / "email_previews")
 
     def test_app_data_dir_can_be_overridden(self):
         with patch.dict(os.environ, {"AUTO_ORDER_BOT_DATA_DIR": r"C:\AutoOrderData"}):
