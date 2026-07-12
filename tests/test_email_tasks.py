@@ -75,6 +75,43 @@ class EmailTasksTests(unittest.TestCase):
         self.assertEqual(message["Subject"], "订单 ORD-1")
         self.assertIn("Hi Alice, order ORD-1", message.get_content())
 
+    def test_compose_email_message_replaces_text_attachment_variables(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template_file = root / "template.txt"
+            template_file.write_text("Body {{name}}", encoding="utf-8")
+            attachment_file = root / "attachment.txt"
+            attachment_file.write_text("Attachment for {{name}} / {{order_id}}", encoding="utf-8")
+            data_file = root / "data.csv"
+            data_file.write_text(
+                "email,run_at,name,order_id,product_description,quantity,total_price\n"
+                "buyer@example.com,2026-07-05 10:00,Alice,ORD-1,Bracelet,1,£100\n",
+                encoding="utf-8-sig",
+            )
+            task = build_email_tasks(data_file, default_tz=get_timezone("Asia/Shanghai"))[0]
+            account = EmailLoginInfo(
+                email="sender@example.com",
+                provider="自定义",
+                smtp_host="smtp.example.com",
+                smtp_port=465,
+                security=SECURITY_SSL,
+                username="sender@example.com",
+                password="secret",
+            )
+
+            message = compose_email_message(
+                account=account,
+                task=task,
+                email_type=EMAIL_TYPE_ORDER_CONFIRMATION,
+                subject_template="订单 {{order_id}}",
+                template_file=template_file,
+                attachment_file=attachment_file,
+            )
+
+        attachments = list(message.iter_attachments())
+        self.assertEqual(len(attachments), 1)
+        self.assertIn("Attachment for Alice / ORD-1", attachments[0].get_content())
+
     def test_custom_email_requires_run_time_column(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_file = Path(temp_dir) / "data.csv"

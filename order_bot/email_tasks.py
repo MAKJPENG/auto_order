@@ -28,6 +28,8 @@ from .email_templates import (
 from .time_utils import parse_datetime, resolve_order_timezone, timezone_label
 
 
+TEXT_ATTACHMENT_SUFFIXES = {".txt", ".html", ".htm", ".md", ".csv", ".json", ".xml"}
+
 DEFAULT_EMAIL_SUBJECTS = {
     EMAIL_TYPE_ORDER_CONFIRMATION: "订单确认邮件",
     EMAIL_TYPE_SHIPPING_CONFIRMATION: "物流邮件",
@@ -149,7 +151,7 @@ def compose_email_message(
         message.set_content(body)
 
     if attachment_file:
-        _attach_file(message, attachment_file)
+        _attach_file(message, attachment_file, task.row, spec)
     return message
 
 
@@ -169,11 +171,20 @@ def send_email_message(account: EmailLoginInfo, message: EmailMessage, *, timeou
         smtp.send_message(message)
 
 
-def _attach_file(message: EmailMessage, path: Path) -> None:
+def _attach_file(message: EmailMessage, path: Path, row: dict[str, str], spec) -> None:
     if not path.exists():
         raise FileNotFoundError(f"附件不存在：{path}")
     mime_type, _encoding = mimetypes.guess_type(path.name)
     maintype, subtype = (mime_type or "application/octet-stream").split("/", 1)
+    if path.suffix.lower() in TEXT_ATTACHMENT_SUFFIXES:
+        rendered = render_template(read_template(path), row, spec).encode("utf-8")
+        message.add_attachment(
+            rendered,
+            maintype=maintype,
+            subtype=subtype,
+            filename=path.name,
+        )
+        return
     message.add_attachment(
         path.read_bytes(),
         maintype=maintype,
