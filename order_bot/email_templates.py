@@ -220,6 +220,42 @@ def render_template(template_text: str, row: dict[str, str], spec: EmailTypeSpec
     return PLACEHOLDER_PATTERN.sub(replace_match, template_text)
 
 
+def missing_placeholders_for_row(
+    template_text: str,
+    row: dict[str, str],
+    spec: EmailTypeSpec | None = None,
+) -> list[str]:
+    missing: list[str] = []
+    variables = {
+        _normalize_key(alias): variable
+        for variable in (spec.variables if spec else ())
+        for alias in variable.aliases
+    }
+    headers = list(row.keys())
+    for placeholder in extract_placeholders(template_text):
+        variable_def = variables.get(_normalize_key(placeholder))
+        if variable_def is None:
+            has_data_column = _find_header(headers, (placeholder,)) is not None
+        else:
+            has_data_column = _find_header(headers, variable_def.aliases) is not None
+        if not has_data_column:
+            missing.append(placeholder)
+    return missing
+
+
+def ensure_template_variables_available(
+    template_text: str,
+    row: dict[str, str],
+    spec: EmailTypeSpec | None = None,
+    *,
+    source: str = "邮件模板",
+) -> None:
+    missing = missing_placeholders_for_row(template_text, row, spec)
+    if missing:
+        names = "、".join(missing)
+        raise ValueError(f"{source}变量未在数据文件中找到对应列：{names}")
+
+
 def find_header(headers: list[str], aliases: tuple[str, ...]) -> str | None:
     return _find_header(headers, aliases)
 
@@ -285,19 +321,19 @@ def _validate_template_variables(
             if not has_data:
                 errors.append(f"数据文件缺少必填列：{variable_def.name}")
         elif has_placeholder and not has_data:
-            warnings.append(f"非必填变量未找到数据列，将不会替换：{variable_def.name}")
+            warnings.append(f"非必填变量未找到数据列，发送时会标记失败：{variable_def.name}")
 
     if spec.name == EMAIL_TYPE_CUSTOM:
         for placeholder in placeholders:
             if _normalize_key(placeholder) not in header_keys:
-                warnings.append(f"自定义变量未找到数据列，将不会替换：{placeholder}")
+                warnings.append(f"自定义变量未找到数据列，发送时会标记失败：{placeholder}")
         return
 
     known_aliases = set(variable_by_alias)
     for placeholder in placeholders:
         normalized = _normalize_key(placeholder)
         if normalized not in known_aliases and normalized not in header_keys:
-            warnings.append(f"模板变量不在固定类型定义中，且数据文件无同名列：{placeholder}")
+            warnings.append(f"模板变量不在固定类型定义中，且数据文件无同名列，发送时会标记失败：{placeholder}")
 
 
 def _load_csv(path: Path) -> EmailDataTable:

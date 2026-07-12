@@ -65,6 +65,8 @@ EMAIL_FINISHED_STATUSES = {EMAIL_STATUS_SENT, EMAIL_STATUS_FAILED, EMAIL_STATUS_
 FAILED_ROW_TAG = "failed"
 ERROR_LOG_TAG = "error"
 ERROR_LOG_KEYWORDS = ("失败", "错误", "出错", "异常", "Traceback", "Error", "Exception", "failed", "failure")
+EMAIL_TASK_PROGRESS_MIN_HEIGHT = 220
+EMAIL_TASK_PROGRESS_VISIBLE_ROWS = 8
 
 
 @dataclass
@@ -165,7 +167,7 @@ class EmailApp:
         outer = ttk.Frame(self.root, padding=24)
         outer.pack(fill="both", expand=True)
         outer.columnconfigure(0, weight=1)
-        outer.rowconfigure(3, weight=1)
+        outer.rowconfigure(3, weight=1, minsize=EMAIL_TASK_PROGRESS_MIN_HEIGHT)
         outer.rowconfigure(4, weight=0)
 
         saved_frame = ttk.LabelFrame(outer, text="历史登录邮箱")
@@ -281,7 +283,7 @@ class EmailApp:
 
         table_frame = ttk.LabelFrame(outer, text="邮件任务进度")
         table_frame.grid(row=3, column=0, sticky="nsew", pady=(8, 0))
-        self.email_table = ttk.Treeview(table_frame, show="headings")
+        self.email_table = ttk.Treeview(table_frame, show="headings", height=EMAIL_TASK_PROGRESS_VISIBLE_ROWS)
         email_y_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.email_table.yview)
         email_x_scroll = ttk.Scrollbar(table_frame, orient="horizontal", command=self.email_table.xview)
         self.email_table.configure(yscrollcommand=email_y_scroll.set, xscrollcommand=email_x_scroll.set)
@@ -583,11 +585,12 @@ class EmailApp:
                         template_file=template_file,
                         attachment_file=attachment_file,
                     )
-                    send_email_message(account, message)
+                    result = send_email_message(account, message)
                 except Exception as exc:
                     self._emit_email("email_failed", task=task, message=self._format_email_exception(exc))
                     continue
-                self._emit_email("email_sent", task=task, message="邮件已发送")
+                recipients = "、".join(result.accepted_recipients)
+                self._emit_email("email_sent", task=task, message=f"SMTP已接收：{recipients}")
         except Exception as exc:
             self._emit_email("email_fatal", message=str(exc), traceback=traceback.format_exc())
         finally:

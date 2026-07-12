@@ -6,6 +6,7 @@ import ssl
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from email.message import EmailMessage
+from email.utils import format_datetime, getaddresses, make_msgid
 from pathlib import Path
 
 from .email_accounts import EmailLoginInfo, SECURITY_SSL
@@ -19,6 +20,7 @@ from .email_templates import (
     REGION_ALIASES,
     RUN_AT_ALIASES,
     TIMEZONE_ALIASES,
+    ensure_template_variables_available,
     find_header,
     load_data_file,
     read_template,
@@ -47,6 +49,11 @@ class EmailTask:
     scheduled_at: datetime
     timezone_name: str
     source: str = "run_at"
+
+
+@dataclass(frozen=True)
+class EmailSendResult:
+    accepted_recipients: tuple[str, ...]
 
 
 def default_email_subject(email_type: str) -> str:
@@ -131,19 +138,26 @@ def compose_email_message(
     attachment_file: Path | None,
 ) -> EmailMessage:
     spec = EMAIL_TYPE_SPECS[email_type]
-    subject = render_template(subject_template or default_email_subject(email_type), task.row, spec).strip()
+    subject_source = subject_template or default_email_subject(email_type)
+    ensure_template_variables_available(subject_source, task.row, spec, source="邮件标题")
+    subject = render_template(subject_source, task.row, spec).strip()
     subject = subject or default_email_subject(email_type)
 
     body = "请查收附件。"
     is_html = False
     if template_file:
-        body = render_template(read_template(template_file), task.row, spec)
+        template_text = read_template(template_file)
+        ensure_template_variables_available(template_text, task.row, spec, source="邮件模板")
+        body = render_template(template_text, task.row, spec)
         is_html = template_file.suffix.lower() in {".html", ".htm"}
 
     message = EmailMessage()
     message["From"] = account.email
     message["To"] = task.recipient
+    message["Reply-To"] = account.email
     message["Subject"] = subject
+    message["Date"] = format_datetime(datetime.now().astimezone())
+    message["Message-ID"] = make_msgid(domain=account.email.rsplit("@", 1)[-1])
     if is_html:
         message.set_content("请使用支持 HTML 的邮箱客户端查看邮件内容。")
         message.add_alternative(body, subtype="html")
@@ -155,20 +169,24 @@ def compose_email_message(
     return message
 
 
-def send_email_message(account: EmailLoginInfo, message: EmailMessage, *, timeout: float = 30) -> None:
+def send_email_message(account: EmailLoginInfo, message: EmailMessage, *, timeout: float = 30) -> EmailSendResult:
     context = ssl.create_default_context()
+    recipients = _message_recipients(message)
     if account.security == SECURITY_SSL:
         with smtplib.SMTP_SSL(account.smtp_host, account.smtp_port, timeout=timeout, context=context) as smtp:
             smtp.login(account.username, account.password)
-            smtp.send_message(message)
-        return
+            refused = smtp.send_message(message, from_addr=account.email, to_addrs=recipients)
+        _raise_if_refused(refused)
+        return EmailSendResult(accepted_recipients=tuple(recipients))
 
     with smtplib.SMTP(account.smtp_host, account.smtp_port, timeout=timeout) as smtp:
         smtp.ehlo()
         smtp.starttls(context=context)
         smtp.ehlo()
         smtp.login(account.username, account.password)
-        smtp.send_message(message)
+        refused = smtp.send_message(message, from_addr=account.email, to_addrs=recipients)
+    _raise_if_refused(refused)
+    return EmailSendResult(accepted_recipients=tuple(recipients))
 
 
 def _attach_file(message: EmailMessage, path: Path, row: dict[str, str], spec) -> None:
@@ -177,7 +195,9 @@ def _attach_file(message: EmailMessage, path: Path, row: dict[str, str], spec) -
     mime_type, _encoding = mimetypes.guess_type(path.name)
     maintype, subtype = (mime_type or "application/octet-stream").split("/", 1)
     if path.suffix.lower() in TEXT_ATTACHMENT_SUFFIXES:
-        rendered = render_template(read_template(path), row, spec).encode("utf-8")
+        attachment_text = read_template(path)
+        ensure_template_variables_available(attachment_text, row, spec, source="文本附件")
+        rendered = render_template(attachment_text, row, spec).encode("utf-8")
         message.add_attachment(
             rendered,
             maintype=maintype,
@@ -191,6 +211,28 @@ def _attach_file(message: EmailMessage, path: Path, row: dict[str, str], spec) -
         subtype=subtype,
         filename=path.name,
     )
+
+
+def _message_recipients(message: EmailMessage) -> list[str]:
+    headers = []
+    for header_name in ("to", "cc", "bcc"):
+        headers.extend(message.get_all(header_name, []))
+    recipients = [address for _name, address in getaddresses(headers) if address]
+    if not recipients:
+        raise ValueError("邮件没有收件人地址。")
+    return recipients
+
+
+def _raise_if_refused(refused: dict) -> None:
+    if not refused:
+        return
+    details = []
+    for recipient, response in refused.items():
+        code, text = response
+        if isinstance(text, bytes):
+            text = text.decode("utf-8", errors="replace")
+        details.append(f"{recipient} ({code} {text})")
+    raise RuntimeError("SMTP服务器拒收收件人：" + "；".join(details))
 
 
 def _parse_excel_serial_datetime(value: str, tz) -> datetime | None:

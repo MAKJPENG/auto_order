@@ -129,7 +129,7 @@ class EmailTemplatesTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn("订单确认邮件 必须上传邮件模板文件。", result.errors)
 
-    def test_custom_template_warns_missing_optional_data_but_keeps_placeholder(self):
+    def test_custom_template_warns_missing_data_column_but_keeps_placeholder(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             data_file = root / "data.csv"
@@ -147,7 +147,7 @@ class EmailTemplatesTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertIn("Alice", result.preview)
         self.assertIn("{{优惠码}}", result.preview)
-        self.assertIn("自定义变量未找到数据列，将不会替换：优惠码", result.warnings)
+        self.assertIn("自定义变量未找到数据列，发送时会标记失败：优惠码", result.warnings)
 
     def test_render_template_replaces_aliases_and_keeps_missing_values(self):
         rendered = render_template(
