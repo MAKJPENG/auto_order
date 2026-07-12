@@ -23,6 +23,15 @@ from .email_accounts import (
     security_options,
     verify_smtp_login,
 )
+from .email_templates import (
+    EMAIL_TYPE_CUSTOM,
+    EMAIL_TYPE_ORDER_CONFIRMATION,
+    EMAIL_TYPE_SHIPPING_CONFIRMATION,
+    EMAIL_TYPE_VAT_INVOICE,
+    email_type_names,
+    placeholder_hint,
+    validate_email_task,
+)
 from .models import Order, OrderAttemptResult, ScheduleEntry
 from .paths import log_dir
 from .scheduler import build_schedule, save_schedule
@@ -92,12 +101,17 @@ class EmailApp:
     def __init__(self, root: Tk):
         self.root = root
         self.root.title("邮箱登录")
-        self.root.geometry("900x620")
-        self.root.minsize(760, 520)
+        self.root.geometry("1040x760")
+        self.root.minsize(860, 650)
         self.closed = False
         self.store = EmailAccountStore()
         self.login_events: queue.Queue[tuple[str, dict]] = queue.Queue()
         self.login_worker: threading.Thread | None = None
+        self.mail_type = StringVar(value=EMAIL_TYPE_ORDER_CONFIRMATION)
+        self.data_file = StringVar()
+        self.template_file = StringVar()
+        self.attachment_file = StringVar()
+        self.template_hint = StringVar(value=placeholder_hint(EMAIL_TYPE_ORDER_CONFIRMATION))
         self.saved_account = StringVar()
         self.email = StringVar()
         self.provider = StringVar(value="自动识别")
@@ -115,7 +129,7 @@ class EmailApp:
         outer = ttk.Frame(self.root, padding=24)
         outer.pack(fill="both", expand=True)
         outer.columnconfigure(0, weight=1)
-        outer.rowconfigure(2, weight=1)
+        outer.rowconfigure(3, weight=1)
 
         saved_frame = ttk.LabelFrame(outer, text="历史登录邮箱")
         saved_frame.grid(row=0, column=0, sticky="ew")
@@ -173,8 +187,49 @@ class EmailApp:
         self.login_button.pack(side="left")
         ttk.Label(actions, textvariable=self.status_text).pack(side="left", padx=16)
 
+        task_frame = ttk.LabelFrame(outer, text="邮件任务")
+        task_frame.grid(row=2, column=0, sticky="ew", pady=(8, 8))
+        task_frame.columnconfigure(1, weight=1)
+        task_frame.columnconfigure(3, weight=1)
+
+        type_frame = ttk.Frame(task_frame)
+        type_frame.grid(row=0, column=0, columnspan=4, sticky="ew", padx=8, pady=(8, 4))
+        ttk.Label(type_frame, text="邮件类型").pack(side="left", padx=(0, 8))
+        for email_type in email_type_names():
+            ttk.Radiobutton(
+                type_frame,
+                text=email_type,
+                value=email_type,
+                variable=self.mail_type,
+                command=self._on_mail_type_changed,
+            ).pack(side="left", padx=(0, 16))
+
+        ttk.Label(task_frame, text="数据文件").grid(row=1, column=0, sticky="w", padx=8, pady=6)
+        ttk.Entry(task_frame, textvariable=self.data_file).grid(row=1, column=1, columnspan=2, sticky="ew", padx=4, pady=6)
+        ttk.Button(task_frame, text="选择数据", command=self.choose_email_data_file).grid(row=1, column=3, sticky="e", padx=8, pady=6)
+
+        ttk.Label(task_frame, text="邮件模板").grid(row=2, column=0, sticky="w", padx=8, pady=6)
+        ttk.Entry(task_frame, textvariable=self.template_file).grid(row=2, column=1, sticky="ew", padx=4, pady=6)
+        ttk.Button(task_frame, text="选择模板", command=self.choose_email_template_file).grid(row=2, column=2, sticky="e", padx=4, pady=6)
+        ttk.Button(task_frame, text="清空模板", command=lambda: self.template_file.set("")).grid(row=2, column=3, sticky="e", padx=8, pady=6)
+
+        ttk.Label(task_frame, text="附件").grid(row=3, column=0, sticky="w", padx=8, pady=6)
+        ttk.Entry(task_frame, textvariable=self.attachment_file).grid(row=3, column=1, sticky="ew", padx=4, pady=6)
+        ttk.Button(task_frame, text="选择附件", command=self.choose_email_attachment_file).grid(row=3, column=2, sticky="e", padx=4, pady=6)
+        ttk.Button(task_frame, text="清空附件", command=lambda: self.attachment_file.set("")).grid(row=3, column=3, sticky="e", padx=8, pady=6)
+
+        ttk.Label(task_frame, textvariable=self.template_hint, foreground="#666666").grid(
+            row=4,
+            column=0,
+            columnspan=3,
+            sticky="ew",
+            padx=8,
+            pady=(6, 10),
+        )
+        ttk.Button(task_frame, text="校验并预览", command=self.validate_current_email_task).grid(row=4, column=3, sticky="e", padx=8, pady=(6, 10))
+
         log_frame = ttk.LabelFrame(outer, text="邮箱日志")
-        log_frame.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
+        log_frame.grid(row=3, column=0, sticky="nsew", pady=(8, 0))
         self.email_log = scrolledtext.ScrolledText(log_frame, height=10, state="disabled")
         self.email_log.tag_configure(ERROR_LOG_TAG, foreground="#b00020")
         self.email_log.pack(fill="both", expand=True)
@@ -183,7 +238,68 @@ class EmailApp:
             "说明：Gmail、QQ、163、Outlook 等通常需要使用“授权码/应用专用密码”，"
             "不是网页登录密码。登录信息会保存在本机用户数据目录。"
         )
-        ttk.Label(outer, text=note, foreground="#666666").grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        ttk.Label(outer, text=note, foreground="#666666").grid(row=4, column=0, sticky="ew", pady=(10, 0))
+
+    def _on_mail_type_changed(self) -> None:
+        email_type = self.mail_type.get()
+        self.template_hint.set(placeholder_hint(email_type))
+        if email_type == EMAIL_TYPE_VAT_INVOICE:
+            self._append_email_log("VAT发票邮件：邮件模板文件和附件PDF文件二选一。")
+        elif email_type in {EMAIL_TYPE_ORDER_CONFIRMATION, EMAIL_TYPE_SHIPPING_CONFIRMATION, EMAIL_TYPE_CUSTOM}:
+            self._append_email_log(f"{email_type}：必须上传邮件模板文件，变量格式使用 {{{{变量名}}}}。")
+
+    def choose_email_data_file(self) -> None:
+        filename = filedialog.askopenfilename(
+            title="选择邮件数据文件",
+            filetypes=(("Data files", "*.csv *.xlsx"), ("CSV files", "*.csv"), ("Excel files", "*.xlsx"), ("All files", "*.*")),
+        )
+        if filename:
+            self.data_file.set(filename)
+            self._append_email_log(f"已选择邮件数据文件：{filename}")
+
+    def choose_email_template_file(self) -> None:
+        filename = filedialog.askopenfilename(
+            title="选择邮件模板文件",
+            filetypes=(("Template files", "*.html *.htm *.txt *.md"), ("HTML files", "*.html *.htm"), ("Text files", "*.txt *.md"), ("All files", "*.*")),
+        )
+        if filename:
+            self.template_file.set(filename)
+            self._append_email_log(f"已选择邮件模板文件：{filename}")
+
+    def choose_email_attachment_file(self) -> None:
+        filename = filedialog.askopenfilename(
+            title="选择邮件附件",
+            filetypes=(("PDF files", "*.pdf"), ("All files", "*.*")),
+        )
+        if filename:
+            self.attachment_file.set(filename)
+            self._append_email_log(f"已选择邮件附件：{filename}")
+
+    def validate_current_email_task(self) -> None:
+        result = validate_email_task(
+            email_type=self.mail_type.get(),
+            data_file=self._optional_path(self.data_file.get()),
+            template_file=self._optional_path(self.template_file.get()),
+            attachment_file=self._optional_path(self.attachment_file.get()),
+        )
+        self.status_text.set("邮件任务校验通过" if result.ok else "邮件任务校验失败")
+        if result.ok:
+            self._append_email_log(f"{self.mail_type.get()} 校验通过")
+        for error in result.errors:
+            self._append_email_log(error, level=ERROR_LOG_TAG)
+        for warning in result.warnings:
+            self._append_email_log(f"提示：{warning}")
+        if result.placeholders:
+            self._append_email_log("模板变量：" + "、".join(result.placeholders))
+        if result.preview:
+            preview = result.preview.strip()
+            if len(preview) > 1200:
+                preview = preview[:1200] + "\n...（预览已截断）"
+            self._append_email_log("第一行数据预览：\n" + preview)
+
+    def _optional_path(self, value: str) -> Path | None:
+        value = (value or "").strip()
+        return Path(value) if value else None
 
     def _refresh_saved_accounts(self, selected_email: str | None = None, *, auto_select: bool = True) -> None:
         accounts, active_email = self.store.load()
