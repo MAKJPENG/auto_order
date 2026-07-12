@@ -148,6 +148,9 @@ python -m order_bot --csv "D:\Tencent\xwechat_files\wxid_3r5n3ilqh0c522_480c\msg
 - `logs/orders.jsonl`：每次执行结果的审计日志
 - 源码脚本运行时，日志、排期和失败截图保存在当前运行目录；Mac 安装包运行时会保存到 `~/Library/Application Support/AutoOrderBot/logs`，避免写入只读系统目录。
 - Chromium 浏览器缓存保存在当前用户固定目录，安装新版后会复用，不会每次更新都重新下载。
+- 邮箱登录信息保存在当前用户固定目录，不保存在安装目录；更新安装包只覆盖程序文件，不会清除已保存邮箱。只有点击邮件界面里的 `退出登录` 或 `删除下拉邮箱` 才会删除对应邮箱信息。
+  - Windows：`%LOCALAPPDATA%\AutoOrderBot\email_accounts.json`
+  - macOS：`~/Library/Application Support/AutoOrderBot/email_accounts.json`
 
 ## 打包安装程序
 

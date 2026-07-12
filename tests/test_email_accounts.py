@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from order_bot.email_accounts import (
     EmailAccountStore,
@@ -92,6 +94,14 @@ class EmailAccountsTests(unittest.TestCase):
 
         self.assertEqual(accounts, [])
         self.assertEqual(active_email, "")
+
+    def test_default_store_uses_user_data_dir_across_installer_updates(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            user_data = Path(temp_dir) / "AutoOrderBotUserData"
+            with patch.dict(os.environ, {"AUTO_ORDER_BOT_USER_DATA_DIR": str(user_data)}, clear=False):
+                store = EmailAccountStore()
+
+            self.assertEqual(store.path, user_data / "email_accounts.json")
 
 
 if __name__ == "__main__":
