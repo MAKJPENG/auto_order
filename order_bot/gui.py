@@ -14,6 +14,15 @@ from tkinter import scrolledtext, ttk
 from .audit import AuditLogger
 from .browser_client import BrowserOrderClient, DryRunOrderClient, result_to_dict
 from .csv_loader import load_orders
+from .email_accounts import (
+    EmailAccountStore,
+    EmailLoginError,
+    make_login_info,
+    provider_names,
+    resolve_provider_settings,
+    security_options,
+    verify_smtp_login,
+)
 from .models import Order, OrderAttemptResult, ScheduleEntry
 from .paths import log_dir
 from .scheduler import build_schedule, save_schedule
@@ -82,26 +91,249 @@ class ModeSelectionApp:
 class EmailApp:
     def __init__(self, root: Tk):
         self.root = root
-        self.root.title("自动发送邮件")
-        self.root.geometry("760x480")
-        self.root.minsize(560, 360)
+        self.root.title("邮箱登录")
+        self.root.geometry("900x620")
+        self.root.minsize(760, 520)
+        self.closed = False
+        self.store = EmailAccountStore()
+        self.login_events: queue.Queue[tuple[str, dict]] = queue.Queue()
+        self.login_worker: threading.Thread | None = None
+        self.saved_account = StringVar()
+        self.email = StringVar()
+        self.provider = StringVar(value="自动识别")
+        self.username = StringVar()
+        self.password = StringVar()
+        self.smtp_host = StringVar()
+        self.smtp_port = IntVar(value=465)
+        self.security = StringVar(value="SSL/TLS")
+        self.status_text = StringVar(value="请选择或登录邮箱")
         self._build_layout()
+        self._refresh_saved_accounts()
+        self._poll_login_events()
 
     def _build_layout(self) -> None:
         outer = ttk.Frame(self.root, padding=24)
         outer.pack(fill="both", expand=True)
         outer.columnconfigure(0, weight=1)
-        outer.rowconfigure(1, weight=1)
+        outer.rowconfigure(2, weight=1)
 
-        ttk.Label(
-            outer,
-            text="邮件功能界面已预留，后续会在这里配置邮箱、模板和发送任务。",
-            anchor="center",
-        ).grid(row=0, column=0, sticky="ew", pady=(0, 16))
-        ttk.Frame(outer).grid(row=1, column=0, sticky="nsew")
-        ttk.Button(outer, text="返回", command=self._back).grid(row=2, column=0, sticky="e")
+        saved_frame = ttk.LabelFrame(outer, text="历史登录邮箱")
+        saved_frame.grid(row=0, column=0, sticky="ew")
+        saved_frame.columnconfigure(0, weight=1)
+        self.saved_box = ttk.Combobox(saved_frame, textvariable=self.saved_account, state="readonly")
+        self.saved_box.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
+        self.saved_box.bind("<<ComboboxSelected>>", lambda _event: self._load_selected_account())
+        ttk.Button(saved_frame, text="切换登录", command=self.switch_login).grid(row=0, column=1, padx=4, pady=8)
+        ttk.Button(saved_frame, text="退出登录", command=self.logout_current).grid(row=0, column=2, padx=4, pady=8)
+        ttk.Button(saved_frame, text="删除下拉邮箱", command=self.delete_selected_account).grid(row=0, column=3, padx=4, pady=8)
+        ttk.Button(saved_frame, text="返回", command=self._back).grid(row=0, column=4, padx=(16, 8), pady=8)
+
+        login_frame = ttk.LabelFrame(outer, text="邮箱登录")
+        login_frame.grid(row=1, column=0, sticky="ew", pady=(12, 8))
+        login_frame.columnconfigure(1, weight=1)
+        login_frame.columnconfigure(3, weight=1)
+
+        ttk.Label(login_frame, text="邮箱类型").grid(row=0, column=0, sticky="w", padx=8, pady=8)
+        self.provider_box = ttk.Combobox(
+            login_frame,
+            textvariable=self.provider,
+            state="readonly",
+            values=provider_names(),
+        )
+        self.provider_box.grid(row=0, column=1, sticky="ew", padx=4, pady=8)
+        self.provider_box.bind("<<ComboboxSelected>>", lambda _event: self._apply_provider_defaults())
+
+        ttk.Label(login_frame, text="邮箱地址").grid(row=0, column=2, sticky="w", padx=8, pady=8)
+        ttk.Entry(login_frame, textvariable=self.email).grid(row=0, column=3, sticky="ew", padx=4, pady=8)
+
+        ttk.Label(login_frame, text="登录账号").grid(row=1, column=0, sticky="w", padx=8, pady=8)
+        ttk.Entry(login_frame, textvariable=self.username).grid(row=1, column=1, sticky="ew", padx=4, pady=8)
+
+        ttk.Label(login_frame, text="密码/授权码").grid(row=1, column=2, sticky="w", padx=8, pady=8)
+        ttk.Entry(login_frame, textvariable=self.password, show="*").grid(row=1, column=3, sticky="ew", padx=4, pady=8)
+
+        ttk.Label(login_frame, text="SMTP服务器").grid(row=2, column=0, sticky="w", padx=8, pady=8)
+        ttk.Entry(login_frame, textvariable=self.smtp_host).grid(row=2, column=1, sticky="ew", padx=4, pady=8)
+
+        ttk.Label(login_frame, text="端口").grid(row=2, column=2, sticky="w", padx=8, pady=8)
+        port_frame = ttk.Frame(login_frame)
+        port_frame.grid(row=2, column=3, sticky="ew", padx=4, pady=8)
+        ttk.Spinbox(port_frame, from_=1, to=65535, textvariable=self.smtp_port, width=8).pack(side="left")
+        ttk.Combobox(
+            port_frame,
+            textvariable=self.security,
+            state="readonly",
+            width=12,
+            values=security_options(),
+        ).pack(side="left", padx=(8, 0))
+
+        actions = ttk.Frame(login_frame)
+        actions.grid(row=3, column=0, columnspan=4, sticky="ew", padx=8, pady=(8, 10))
+        self.login_button = ttk.Button(actions, text="登录并保存", command=self.login_and_save)
+        self.login_button.pack(side="left")
+        ttk.Label(actions, textvariable=self.status_text).pack(side="left", padx=16)
+
+        log_frame = ttk.LabelFrame(outer, text="邮箱日志")
+        log_frame.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
+        self.email_log = scrolledtext.ScrolledText(log_frame, height=10, state="disabled")
+        self.email_log.tag_configure(ERROR_LOG_TAG, foreground="#b00020")
+        self.email_log.pack(fill="both", expand=True)
+
+        note = (
+            "说明：Gmail、QQ、163、Outlook 等通常需要使用“授权码/应用专用密码”，"
+            "不是网页登录密码。登录信息会保存在本机用户数据目录。"
+        )
+        ttk.Label(outer, text=note, foreground="#666666").grid(row=3, column=0, sticky="ew", pady=(10, 0))
+
+    def _refresh_saved_accounts(self, selected_email: str | None = None, *, auto_select: bool = True) -> None:
+        accounts, active_email = self.store.load()
+        values = [account.email for account in accounts]
+        self.saved_box.configure(values=values)
+        chosen = selected_email or active_email or (values[0] if auto_select and values else "")
+        self.saved_account.set(chosen if chosen in values else "")
+        if self.saved_account.get():
+            self._load_selected_account()
+
+    def _load_selected_account(self) -> None:
+        account = self.store.get(self.saved_account.get())
+        if account is None:
+            return
+        self.email.set(account.email)
+        self.provider.set(account.provider)
+        self.username.set(account.username)
+        self.password.set(account.password)
+        self.smtp_host.set(account.smtp_host)
+        self.smtp_port.set(account.smtp_port)
+        self.security.set(account.security)
+        self.status_text.set(f"已加载：{account.email}")
+
+    def _apply_provider_defaults(self) -> None:
+        try:
+            settings = resolve_provider_settings(self.email.get(), self.provider.get())
+        except EmailLoginError:
+            if self.provider.get() == "自定义":
+                self.smtp_host.set("")
+                self.smtp_port.set(465)
+                self.security.set("SSL/TLS")
+            return
+        if settings.smtp_host:
+            self.smtp_host.set(settings.smtp_host)
+        self.smtp_port.set(settings.smtp_port)
+        self.security.set(settings.security)
+
+    def login_and_save(self) -> None:
+        if self.login_worker and self.login_worker.is_alive():
+            self._append_email_log("邮箱登录正在进行中，请稍等")
+            return
+        try:
+            account = make_login_info(
+                email=self.email.get(),
+                provider=self.provider.get(),
+                smtp_host=self.smtp_host.get(),
+                smtp_port=int(self.smtp_port.get()),
+                security=self.security.get(),
+                username=self.username.get(),
+                password=self.password.get(),
+            )
+        except Exception as exc:
+            self.status_text.set("邮箱登录信息不完整")
+            self._append_email_log(str(exc), level=ERROR_LOG_TAG)
+            return
+
+        self.login_button.configure(state="disabled")
+        self.status_text.set("正在登录邮箱...")
+        self._append_email_log(f"正在登录邮箱：{account.email}")
+        self.login_worker = threading.Thread(target=self._login_worker, args=(account,), daemon=True)
+        self.login_worker.start()
+
+    def _login_worker(self, account) -> None:
+        try:
+            verify_smtp_login(account)
+            self.store.upsert(account, set_active=True)
+            self.login_events.put(("login_success", {"email": account.email}))
+        except Exception as exc:
+            self.login_events.put(("login_failed", {"message": str(exc)}))
+
+    def _poll_login_events(self) -> None:
+        if self.closed:
+            return
+        try:
+            while True:
+                event, payload = self.login_events.get_nowait()
+                self._handle_login_event(event, payload)
+        except queue.Empty:
+            pass
+        self.root.after(200, self._poll_login_events)
+
+    def _handle_login_event(self, event: str, payload: dict) -> None:
+        self.login_button.configure(state="normal")
+        if event == "login_success":
+            email = payload["email"]
+            self.status_text.set(f"邮箱登录成功：{email}")
+            self._append_email_log(f"邮箱登录成功并已保存：{email}")
+            self._refresh_saved_accounts(email)
+        elif event == "login_failed":
+            self.status_text.set("邮箱登录失败")
+            self._append_email_log(payload.get("message", "邮箱登录失败"), level=ERROR_LOG_TAG)
+
+    def switch_login(self) -> None:
+        email = self.saved_account.get()
+        if not email:
+            self._append_email_log("请先在下拉列表选择历史邮箱", level=ERROR_LOG_TAG)
+            return
+        try:
+            self.store.set_active(email)
+        except EmailLoginError as exc:
+            self._append_email_log(str(exc), level=ERROR_LOG_TAG)
+            return
+        self._load_selected_account()
+        self._append_email_log(f"已切换登录邮箱：{email}")
+
+    def logout_current(self) -> None:
+        email = self.saved_account.get()
+        if not email:
+            self._append_email_log("当前没有可退出的邮箱", level=ERROR_LOG_TAG)
+            return
+        self.store.delete(email)
+        self._clear_form()
+        self._refresh_saved_accounts(auto_select=False)
+        self.status_text.set(f"已退出并删除登录信息：{email}")
+        self._append_email_log(f"已退出并删除登录信息：{email}")
+
+    def delete_selected_account(self) -> None:
+        email = self.saved_account.get()
+        if not email:
+            self._append_email_log("请先在下拉列表选择要删除的邮箱", level=ERROR_LOG_TAG)
+            return
+        self.store.delete(email)
+        if self.email.get().strip().lower() == email.lower():
+            self._clear_form()
+        self._refresh_saved_accounts(auto_select=False)
+        self.status_text.set(f"已删除邮箱登录信息：{email}")
+        self._append_email_log(f"已删除邮箱登录信息：{email}")
+
+    def _clear_form(self) -> None:
+        self.saved_account.set("")
+        self.email.set("")
+        self.provider.set("自动识别")
+        self.username.set("")
+        self.password.set("")
+        self.smtp_host.set("")
+        self.smtp_port.set(465)
+        self.security.set("SSL/TLS")
+
+    def _append_email_log(self, message: str, *, level: str | None = None) -> None:
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.email_log.configure(state="normal")
+        if level == ERROR_LOG_TAG:
+            self.email_log.insert("end", f"[{timestamp}] {message}\n", ERROR_LOG_TAG)
+        else:
+            self.email_log.insert("end", f"[{timestamp}] {message}\n")
+        self.email_log.see("end")
+        self.email_log.configure(state="disabled")
 
     def _back(self) -> None:
+        self.closed = True
         clear_root(self.root)
         ModeSelectionApp(self.root)
 
