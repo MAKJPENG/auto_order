@@ -15,6 +15,9 @@ EMAIL_TYPE_CUSTOM = "自定义邮件"
 
 PLACEHOLDER_PATTERN = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
 RECIPIENT_ALIASES = ("email", "邮箱", "收件邮箱", "收件人邮箱", "Email", "Email Address")
+RUN_AT_ALIASES = ("run_at", "运行时间", "发送时间", "预计发送时间", "计划发送时间", "send_at", "scheduled_at", "Run At", "Send At")
+REGION_ALIASES = ("地区", "国家", "国家/地区", "地区/国家", "country", "region", "Country", "Region")
+TIMEZONE_ALIASES = ("timezone", "time_zone", "时区", "当地时区", "Timezone", "Time Zone")
 
 
 @dataclass(frozen=True)
@@ -182,6 +185,7 @@ def validate_email_task(
 
     if data:
         _validate_recipient_column(data.headers, errors)
+        _validate_run_at_column(data.headers, errors)
         if has_template:
             _validate_template_variables(spec, data.headers, placeholders, warnings, errors)
             if data.rows:
@@ -211,6 +215,18 @@ def render_template(template_text: str, row: dict[str, str], spec: EmailTypeSpec
     return PLACEHOLDER_PATTERN.sub(replace_match, template_text)
 
 
+def find_header(headers: list[str], aliases: tuple[str, ...]) -> str | None:
+    return _find_header(headers, aliases)
+
+
+def value_for_aliases(row: dict[str, str], aliases: tuple[str, ...]) -> str | None:
+    return _value_for_aliases(row, aliases)
+
+
+def normalize_key(value: str) -> str:
+    return _normalize_key(value)
+
+
 def _load_data_file_or_error(path: Path | None, errors: list[str]) -> EmailDataTable | None:
     if not path:
         errors.append("必须上传数据文件。")
@@ -233,6 +249,11 @@ def _load_data_file_or_error(path: Path | None, errors: list[str]) -> EmailDataT
 def _validate_recipient_column(headers: list[str], errors: list[str]) -> None:
     if _find_header(headers, RECIPIENT_ALIASES) is None:
         errors.append("数据文件必须包含收件邮箱列：email / 邮箱 / 收件邮箱。")
+
+
+def _validate_run_at_column(headers: list[str], errors: list[str]) -> None:
+    if _find_header(headers, RUN_AT_ALIASES) is None:
+        errors.append("数据文件必须包含运行时间列：run_at / 运行时间 / 发送时间。")
 
 
 def _validate_template_variables(

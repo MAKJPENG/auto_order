@@ -23,6 +23,13 @@ from .email_accounts import (
     security_options,
     verify_smtp_login,
 )
+from .email_tasks import (
+    EmailTask,
+    build_email_tasks,
+    compose_email_message,
+    default_email_subject,
+    send_email_message,
+)
 from .email_templates import (
     EMAIL_TYPE_CUSTOM,
     EMAIL_TYPE_ORDER_CONFIRMATION,
@@ -47,6 +54,14 @@ STATUS_SKIPPED = "已跳过"
 STATUS_FAILED = "下单失败"
 STATUS_CANCELLED = "已停止"
 
+EMAIL_STATUS_PENDING = "待发送"
+EMAIL_STATUS_WAITING = "等待发送"
+EMAIL_STATUS_SENDING = "进行中"
+EMAIL_STATUS_SENT = "发送完成"
+EMAIL_STATUS_FAILED = "发送失败"
+EMAIL_STATUS_CANCELLED = "已停止"
+EMAIL_FINISHED_STATUSES = {EMAIL_STATUS_SENT, EMAIL_STATUS_FAILED, EMAIL_STATUS_CANCELLED}
+
 FAILED_ROW_TAG = "failed"
 ERROR_LOG_TAG = "error"
 ERROR_LOG_KEYWORDS = ("失败", "错误", "出错", "异常", "Traceback", "Error", "Exception", "failed", "failure")
@@ -59,6 +74,16 @@ class RowState:
     row_key: str
     status: str = STATUS_PENDING
     message: str = ""
+
+
+@dataclass
+class EmailRowState:
+    task: EmailTask
+    item_id: str
+    row_key: str
+    status: str = EMAIL_STATUS_PENDING
+    message: str = ""
+    reason: str = ""
 
 
 class ModeSelectionApp:
@@ -101,17 +126,22 @@ class EmailApp:
     def __init__(self, root: Tk):
         self.root = root
         self.root.title("邮箱登录")
-        self.root.geometry("1040x760")
-        self.root.minsize(860, 650)
+        self.root.geometry("1220x840")
+        self.root.minsize(980, 700)
         self.closed = False
         self.store = EmailAccountStore()
         self.login_events: queue.Queue[tuple[str, dict]] = queue.Queue()
         self.login_worker: threading.Thread | None = None
+        self.email_events: queue.Queue[tuple[str, dict]] = queue.Queue()
+        self.email_stop_event = threading.Event()
+        self.email_worker: threading.Thread | None = None
         self.mail_type = StringVar(value=EMAIL_TYPE_ORDER_CONFIRMATION)
+        self.email_subject = StringVar(value=default_email_subject(EMAIL_TYPE_ORDER_CONFIRMATION))
         self.data_file = StringVar()
         self.template_file = StringVar()
         self.attachment_file = StringVar()
         self.template_hint = StringVar(value=placeholder_hint(EMAIL_TYPE_ORDER_CONFIRMATION))
+        self.use_region_timezone = BooleanVar(value=True)
         self.saved_account = StringVar()
         self.email = StringVar()
         self.provider = StringVar(value="自动识别")
@@ -121,15 +151,22 @@ class EmailApp:
         self.smtp_port = IntVar(value=465)
         self.security = StringVar(value="SSL/TLS")
         self.status_text = StringVar(value="请选择或登录邮箱")
+        self.email_progress_text = StringVar(value="0/0")
+        self.tz = get_timezone("Asia/Shanghai")
+        self.email_rows: list[EmailRowState] = []
+        self.email_table_columns: list[str] = []
         self._build_layout()
         self._refresh_saved_accounts()
         self._poll_login_events()
+        self._poll_email_events()
+        self._tick_email_countdowns()
 
     def _build_layout(self) -> None:
         outer = ttk.Frame(self.root, padding=24)
         outer.pack(fill="both", expand=True)
         outer.columnconfigure(0, weight=1)
         outer.rowconfigure(3, weight=1)
+        outer.rowconfigure(4, weight=0)
 
         saved_frame = ttk.LabelFrame(outer, text="历史登录邮箱")
         saved_frame.grid(row=0, column=0, sticky="ew")
@@ -204,32 +241,59 @@ class EmailApp:
                 command=self._on_mail_type_changed,
             ).pack(side="left", padx=(0, 16))
 
-        ttk.Label(task_frame, text="数据文件").grid(row=1, column=0, sticky="w", padx=8, pady=6)
-        ttk.Entry(task_frame, textvariable=self.data_file).grid(row=1, column=1, columnspan=2, sticky="ew", padx=4, pady=6)
-        ttk.Button(task_frame, text="选择数据", command=self.choose_email_data_file).grid(row=1, column=3, sticky="e", padx=8, pady=6)
+        ttk.Label(task_frame, text="邮件主题").grid(row=1, column=0, sticky="w", padx=8, pady=6)
+        ttk.Entry(task_frame, textvariable=self.email_subject).grid(row=1, column=1, columnspan=3, sticky="ew", padx=4, pady=6)
 
-        ttk.Label(task_frame, text="邮件模板").grid(row=2, column=0, sticky="w", padx=8, pady=6)
-        ttk.Entry(task_frame, textvariable=self.template_file).grid(row=2, column=1, sticky="ew", padx=4, pady=6)
-        ttk.Button(task_frame, text="选择模板", command=self.choose_email_template_file).grid(row=2, column=2, sticky="e", padx=4, pady=6)
-        ttk.Button(task_frame, text="清空模板", command=lambda: self.template_file.set("")).grid(row=2, column=3, sticky="e", padx=8, pady=6)
+        ttk.Label(task_frame, text="数据文件").grid(row=2, column=0, sticky="w", padx=8, pady=6)
+        ttk.Entry(task_frame, textvariable=self.data_file).grid(row=2, column=1, columnspan=2, sticky="ew", padx=4, pady=6)
+        ttk.Button(task_frame, text="选择数据", command=self.choose_email_data_file).grid(row=2, column=3, sticky="e", padx=8, pady=6)
 
-        ttk.Label(task_frame, text="附件").grid(row=3, column=0, sticky="w", padx=8, pady=6)
-        ttk.Entry(task_frame, textvariable=self.attachment_file).grid(row=3, column=1, sticky="ew", padx=4, pady=6)
-        ttk.Button(task_frame, text="选择附件", command=self.choose_email_attachment_file).grid(row=3, column=2, sticky="e", padx=4, pady=6)
-        ttk.Button(task_frame, text="清空附件", command=lambda: self.attachment_file.set("")).grid(row=3, column=3, sticky="e", padx=8, pady=6)
+        ttk.Label(task_frame, text="邮件模板").grid(row=3, column=0, sticky="w", padx=8, pady=6)
+        ttk.Entry(task_frame, textvariable=self.template_file).grid(row=3, column=1, sticky="ew", padx=4, pady=6)
+        ttk.Button(task_frame, text="选择模板", command=self.choose_email_template_file).grid(row=3, column=2, sticky="e", padx=4, pady=6)
+        ttk.Button(task_frame, text="清空模板", command=lambda: self.template_file.set("")).grid(row=3, column=3, sticky="e", padx=8, pady=6)
+
+        ttk.Label(task_frame, text="附件").grid(row=4, column=0, sticky="w", padx=8, pady=6)
+        ttk.Entry(task_frame, textvariable=self.attachment_file).grid(row=4, column=1, sticky="ew", padx=4, pady=6)
+        ttk.Button(task_frame, text="选择附件", command=self.choose_email_attachment_file).grid(row=4, column=2, sticky="e", padx=4, pady=6)
+        ttk.Button(task_frame, text="清空附件", command=lambda: self.attachment_file.set("")).grid(row=4, column=3, sticky="e", padx=8, pady=6)
 
         ttk.Label(task_frame, textvariable=self.template_hint, foreground="#666666").grid(
-            row=4,
+            row=5,
             column=0,
-            columnspan=3,
+            columnspan=4,
             sticky="ew",
             padx=8,
-            pady=(6, 10),
+            pady=(4, 6),
         )
-        ttk.Button(task_frame, text="校验并预览", command=self.validate_current_email_task).grid(row=4, column=3, sticky="e", padx=8, pady=(6, 10))
+        task_actions = ttk.Frame(task_frame)
+        task_actions.grid(row=6, column=0, columnspan=4, sticky="ew", padx=8, pady=(4, 10))
+        ttk.Checkbutton(task_actions, text="按地区/时区发送", variable=self.use_region_timezone).pack(side="left", padx=(0, 12))
+        ttk.Button(task_actions, text="校验并预览", command=self.validate_current_email_task).pack(side="left")
+        self.start_email_button = ttk.Button(task_actions, text="开始发送", command=self.start_email_tasks)
+        self.start_email_button.pack(side="left", padx=8)
+        self.stop_email_button = ttk.Button(task_actions, text="停止等待", command=self.stop_email_tasks, state="disabled")
+        self.stop_email_button.pack(side="left")
+        ttk.Button(task_actions, text="导出任务日志", command=self.export_email_progress).pack(side="left", padx=8)
+        ttk.Label(task_actions, textvariable=self.email_progress_text).pack(side="right")
+        self.email_progress = ttk.Progressbar(task_actions, mode="determinate", length=220)
+        self.email_progress.pack(side="right", padx=8)
 
-        log_frame = ttk.LabelFrame(outer, text="邮箱日志")
-        log_frame.grid(row=3, column=0, sticky="nsew", pady=(8, 0))
+        table_frame = ttk.LabelFrame(outer, text="邮件任务进度")
+        table_frame.grid(row=3, column=0, sticky="nsew", pady=(8, 0))
+        self.email_table = ttk.Treeview(table_frame, show="headings")
+        email_y_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.email_table.yview)
+        email_x_scroll = ttk.Scrollbar(table_frame, orient="horizontal", command=self.email_table.xview)
+        self.email_table.configure(yscrollcommand=email_y_scroll.set, xscrollcommand=email_x_scroll.set)
+        self.email_table.tag_configure(FAILED_ROW_TAG, foreground="#b00020")
+        self.email_table.grid(row=0, column=0, sticky="nsew")
+        email_y_scroll.grid(row=0, column=1, sticky="ns")
+        email_x_scroll.grid(row=1, column=0, sticky="ew")
+        table_frame.rowconfigure(0, weight=1)
+        table_frame.columnconfigure(0, weight=1)
+
+        log_frame = ttk.LabelFrame(outer, text="运行日志")
+        log_frame.grid(row=4, column=0, sticky="ew", pady=(8, 0))
         self.email_log = scrolledtext.ScrolledText(log_frame, height=10, state="disabled")
         self.email_log.tag_configure(ERROR_LOG_TAG, foreground="#b00020")
         self.email_log.pack(fill="both", expand=True)
@@ -238,10 +302,13 @@ class EmailApp:
             "说明：Gmail、QQ、163、Outlook 等通常需要使用“授权码/应用专用密码”，"
             "不是网页登录密码。登录信息会保存在本机用户数据目录。"
         )
-        ttk.Label(outer, text=note, foreground="#666666").grid(row=4, column=0, sticky="ew", pady=(10, 0))
+        ttk.Label(outer, text=note, foreground="#666666").grid(row=5, column=0, sticky="ew", pady=(10, 0))
 
     def _on_mail_type_changed(self) -> None:
         email_type = self.mail_type.get()
+        known_subjects = {default_email_subject(name) for name in email_type_names()}
+        if not self.email_subject.get().strip() or self.email_subject.get().strip() in known_subjects:
+            self.email_subject.set(default_email_subject(email_type))
         self.template_hint.set(placeholder_hint(email_type))
         if email_type == EMAIL_TYPE_VAT_INVOICE:
             self._append_email_log("VAT发票邮件：邮件模板文件和附件PDF文件二选一。")
@@ -255,6 +322,7 @@ class EmailApp:
         )
         if filename:
             self.data_file.set(filename)
+            self._clear_email_tasks()
             self._append_email_log(f"已选择邮件数据文件：{filename}")
 
     def choose_email_template_file(self) -> None:
@@ -285,6 +353,15 @@ class EmailApp:
         self.status_text.set("邮件任务校验通过" if result.ok else "邮件任务校验失败")
         if result.ok:
             self._append_email_log(f"{self.mail_type.get()} 校验通过")
+            try:
+                tasks = self._load_email_tasks()
+            except Exception as exc:
+                self.status_text.set("邮件任务排期失败")
+                self._append_email_log(f"邮件任务排期失败：{exc}", level=ERROR_LOG_TAG)
+            else:
+                self._display_email_tasks(tasks)
+                self.status_text.set(f"已生成邮件任务，共 {len(tasks)} 条")
+                self._append_email_log(f"已生成邮件任务，共 {len(tasks)} 条")
         for error in result.errors:
             self._append_email_log(error, level=ERROR_LOG_TAG)
         for warning in result.warnings:
@@ -300,6 +377,373 @@ class EmailApp:
     def _optional_path(self, value: str) -> Path | None:
         value = (value or "").strip()
         return Path(value) if value else None
+
+    def _load_email_tasks(self) -> list[EmailTask]:
+        data_file = self._optional_path(self.data_file.get())
+        if data_file is None:
+            raise ValueError("请选择邮件数据文件。")
+        return build_email_tasks(
+            data_file,
+            default_tz=self.tz,
+            use_region_timezone=self.use_region_timezone.get(),
+        )
+
+    def start_email_tasks(self) -> None:
+        if self.email_worker and self.email_worker.is_alive():
+            self._append_email_log("邮件发送任务正在运行中，请稍等")
+            return
+
+        account = self.store.active_account()
+        if account is None:
+            self.status_text.set("请先登录邮箱")
+            self._append_email_log("请先登录并保存一个发件邮箱。", level=ERROR_LOG_TAG)
+            return
+
+        validation = validate_email_task(
+            email_type=self.mail_type.get(),
+            data_file=self._optional_path(self.data_file.get()),
+            template_file=self._optional_path(self.template_file.get()),
+            attachment_file=self._optional_path(self.attachment_file.get()),
+        )
+        if not validation.ok:
+            self.status_text.set("邮件任务校验失败")
+            for error in validation.errors:
+                self._append_email_log(error, level=ERROR_LOG_TAG)
+            for warning in validation.warnings:
+                self._append_email_log(f"提示：{warning}")
+            return
+
+        try:
+            tasks = self._load_email_tasks()
+        except Exception as exc:
+            self.status_text.set("邮件任务排期失败")
+            self._append_email_log(f"邮件任务排期失败：{exc}", level=ERROR_LOG_TAG)
+            return
+
+        self._display_email_tasks(tasks)
+        self.email_stop_event.clear()
+        self.start_email_button.configure(state="disabled")
+        self.stop_email_button.configure(state="normal")
+        self.status_text.set("邮件任务已启动，等待发送时间")
+        self._append_email_log(f"邮件任务启动，共 {len(tasks)} 封，发件邮箱：{account.email}")
+
+        self.email_worker = threading.Thread(
+            target=self._run_email_worker,
+            kwargs={
+                "tasks": tasks,
+                "account": account,
+                "email_type": self.mail_type.get(),
+                "subject_template": self.email_subject.get(),
+                "template_file": self._optional_path(self.template_file.get()),
+                "attachment_file": self._optional_path(self.attachment_file.get()),
+            },
+            daemon=True,
+        )
+        self.email_worker.start()
+
+    def stop_email_tasks(self) -> None:
+        self.email_stop_event.set()
+        self.status_text.set("正在停止邮件等待，当前发送动作会先结束")
+        self._append_email_log("收到停止邮件发送请求")
+
+    def export_email_progress(self) -> None:
+        if not self.email_rows or not self.email_table_columns:
+            self._append_email_log("当前没有可导出的邮件任务日志，请先校验预览或开始发送。", level=ERROR_LOG_TAG)
+            return
+
+        default_name = f"{self.mail_type.get()}-{datetime.now(self.tz).strftime('%Y%m%d-%H%M%S')}.csv"
+        filename = filedialog.asksaveasfilename(
+            title="导出邮件任务日志",
+            defaultextension=".csv",
+            initialfile=default_name,
+            filetypes=(("CSV files", "*.csv"), ("All files", "*.*")),
+        )
+        if not filename:
+            return
+
+        path = Path(filename)
+        try:
+            self._write_email_progress_csv(path)
+        except Exception as exc:
+            self.status_text.set("邮件任务日志导出失败")
+            self._append_email_log(f"邮件任务日志导出失败：{exc}", level=ERROR_LOG_TAG)
+            return
+
+        self.status_text.set(f"邮件任务日志已导出：{path}")
+        self._append_email_log(f"邮件任务日志已导出：{path}")
+
+    def _write_email_progress_csv(self, path: Path) -> None:
+        headers, rows = self._email_progress_export_data()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", newline="", encoding="utf-8-sig") as file:
+            writer = csv.writer(file)
+            writer.writerow(headers)
+            writer.writerows(rows)
+
+    def _email_progress_export_data(self) -> tuple[list[str], list[list[str]]]:
+        headers = []
+        for column in self.email_table_columns:
+            try:
+                heading = self.email_table.heading(column, option="text")
+            except Exception:
+                heading = ""
+            headers.append(heading or column)
+        return headers, [self._email_row_values(row) for row in self.email_rows]
+
+    def _display_email_tasks(self, tasks: list[EmailTask]) -> None:
+        self.email_rows.clear()
+        self.email_table.delete(*self.email_table.get_children())
+        computed_columns = {"status", "countdown", "scheduled_at", "timezone", "recipient", "message", "reason"}
+        raw_columns = [column for column in tasks[0].row.keys() if column not in computed_columns] if tasks else []
+        self.email_table_columns = [
+            "status",
+            "countdown",
+            "scheduled_at",
+            "timezone",
+            "recipient",
+            "message",
+            "reason",
+            *raw_columns,
+        ]
+        self.email_table.configure(columns=self.email_table_columns)
+
+        headings = {
+            "status": "状态",
+            "countdown": "预计发送倒计时",
+            "scheduled_at": "计划发送时间",
+            "timezone": "当地时区",
+            "recipient": "收信邮箱",
+            "message": "执行信息",
+            "reason": "失败原因",
+        }
+        widths = {
+            "status": 90,
+            "countdown": 130,
+            "scheduled_at": 180,
+            "timezone": 170,
+            "recipient": 220,
+            "message": 220,
+            "reason": 280,
+            "email": 220,
+            "收件邮箱": 220,
+            "邮件": 220,
+        }
+        for column in self.email_table_columns:
+            self.email_table.heading(column, text=headings.get(column, column))
+            self.email_table.column(column, width=widths.get(column, 140), minwidth=80, stretch=True)
+
+        for task in tasks:
+            row = EmailRowState(task=task, item_id="", row_key=task.row_key)
+            item_id = self.email_table.insert("", "end", values=self._email_row_values(row), tags=self._email_row_tags(row))
+            row.item_id = item_id
+            self.email_rows.append(row)
+        self._refresh_email_progress()
+
+    def _clear_email_tasks(self) -> None:
+        self.email_rows.clear()
+        self.email_table_columns = []
+        if hasattr(self, "email_table"):
+            self.email_table.delete(*self.email_table.get_children())
+        if hasattr(self, "email_progress"):
+            self.email_progress.configure(maximum=1, value=0)
+        self.email_progress_text.set("0/0")
+
+    def _run_email_worker(
+        self,
+        *,
+        tasks: list[EmailTask],
+        account,
+        email_type: str,
+        subject_template: str,
+        template_file: Path | None,
+        attachment_file: Path | None,
+    ) -> None:
+        try:
+            for task in tasks:
+                if self.email_stop_event.is_set():
+                    self._emit_email("email_cancelled", task=task, message="用户停止等待")
+                    continue
+
+                if task.scheduled_at > datetime.now(task.scheduled_at.tzinfo):
+                    self._wait_email_until(task)
+                else:
+                    self._emit_email("email_waiting", task=task, message="运行时间已到，准备发送")
+
+                if self.email_stop_event.is_set():
+                    self._emit_email("email_cancelled", task=task, message="用户停止等待")
+                    continue
+
+                self._emit_email("email_sending", task=task, message="正在生成并发送邮件")
+                try:
+                    message = compose_email_message(
+                        account=account,
+                        task=task,
+                        email_type=email_type,
+                        subject_template=subject_template,
+                        template_file=template_file,
+                        attachment_file=attachment_file,
+                    )
+                    send_email_message(account, message)
+                except Exception as exc:
+                    self._emit_email("email_failed", task=task, message=self._format_email_exception(exc))
+                    continue
+                self._emit_email("email_sent", task=task, message="邮件已发送")
+        except Exception as exc:
+            self._emit_email("email_fatal", message=str(exc), traceback=traceback.format_exc())
+        finally:
+            self._emit_email("email_worker_done")
+
+    def _wait_email_until(self, task: EmailTask) -> None:
+        while not self.email_stop_event.is_set():
+            now = datetime.now(task.scheduled_at.tzinfo)
+            if now >= task.scheduled_at:
+                return
+            remaining = max(0, int((task.scheduled_at - now).total_seconds()))
+            self._emit_email("email_waiting", task=task, message=f"距离发送 {format_seconds(remaining)}")
+            self.email_stop_event.wait(min(1, remaining))
+
+    def _emit_email(self, event: str, **payload) -> None:
+        self.email_events.put((event, payload))
+
+    def _poll_email_events(self) -> None:
+        if self.closed:
+            return
+        try:
+            while True:
+                event, payload = self.email_events.get_nowait()
+                self._handle_email_event(event, payload)
+        except queue.Empty:
+            pass
+        self.root.after(200, self._poll_email_events)
+
+    def _handle_email_event(self, event: str, payload: dict) -> None:
+        task = payload.get("task")
+        message = payload.get("message", "")
+        recipient = task.recipient if task else ""
+
+        if event == "email_waiting" and task:
+            row = self._set_email_row_status(task.row_key, EMAIL_STATUS_WAITING, message)
+            self.status_text.set(message)
+            if row and row.message != message and row.status == EMAIL_STATUS_WAITING:
+                row.message = message
+            return
+
+        if event == "email_sending" and task:
+            self._set_email_row_status(task.row_key, EMAIL_STATUS_SENDING, message)
+            self.status_text.set(f"{recipient} 正在发送")
+            self._append_email_log(f"{recipient}: 正在发送邮件")
+        elif event == "email_sent" and task:
+            self._set_email_row_status(task.row_key, EMAIL_STATUS_SENT, message)
+            self.status_text.set(f"{recipient} 发送完成")
+            self._append_email_log(f"{recipient}: 发送完成")
+        elif event == "email_failed" and task:
+            self._set_email_row_status(task.row_key, EMAIL_STATUS_FAILED, "发送失败", reason=message)
+            self.status_text.set(f"{recipient} 发送失败")
+            self._append_email_log(f"{recipient}: 发送失败，{message}", level=ERROR_LOG_TAG)
+        elif event == "email_cancelled" and task:
+            self._set_email_row_status(task.row_key, EMAIL_STATUS_CANCELLED, message)
+            self._append_email_log(f"{recipient}: {message}")
+        elif event == "email_fatal":
+            self.status_text.set("邮件任务出错")
+            self._append_email_log(f"邮件任务出错：{message}", level=ERROR_LOG_TAG)
+            if payload.get("traceback"):
+                self._append_email_log(payload["traceback"], level=ERROR_LOG_TAG)
+        elif event == "email_worker_done":
+            self.start_email_button.configure(state="normal")
+            self.stop_email_button.configure(state="disabled")
+            if self.status_text.get() != "邮件任务出错":
+                self.status_text.set("邮件任务结束")
+            self._append_email_log("邮件任务结束")
+
+        self._refresh_email_progress()
+
+    def _set_email_row_status(
+        self,
+        row_key: str,
+        status: str,
+        message: str,
+        *,
+        reason: str = "",
+    ) -> EmailRowState | None:
+        row = self._find_email_row(row_key)
+        if row is None:
+            return None
+        row.status = status
+        row.message = message
+        if reason:
+            row.reason = reason
+        self.email_table.item(row.item_id, values=self._email_row_values(row), tags=self._email_row_tags(row))
+        return row
+
+    def _find_email_row(self, row_key: str) -> EmailRowState | None:
+        for row in self.email_rows:
+            if row.row_key == row_key:
+                return row
+        return None
+
+    def _tick_email_countdowns(self) -> None:
+        if self.closed:
+            return
+        for row in self.email_rows:
+            if row.status in {EMAIL_STATUS_PENDING, EMAIL_STATUS_WAITING, EMAIL_STATUS_SENDING}:
+                self.email_table.item(row.item_id, values=self._email_row_values(row), tags=self._email_row_tags(row))
+        self.root.after(1000, self._tick_email_countdowns)
+
+    def _email_row_values(self, row: EmailRowState) -> list[str]:
+        task = row.task
+        computed = {
+            "status": row.status,
+            "countdown": self._email_countdown_text(row),
+            "scheduled_at": self._format_scheduled_at(task.scheduled_at),
+            "timezone": self._format_timezone(task.scheduled_at),
+            "recipient": task.recipient,
+            "message": row.message,
+            "reason": row.reason,
+        }
+        return [computed.get(column, task.row.get(column, "")) for column in self.email_table_columns]
+
+    def _email_row_tags(self, row: EmailRowState) -> tuple[str, ...]:
+        if row.status == EMAIL_STATUS_FAILED:
+            return (FAILED_ROW_TAG,)
+        return ()
+
+    def _email_countdown_text(self, row: EmailRowState) -> str:
+        if row.status in EMAIL_FINISHED_STATUSES:
+            return "-"
+        if row.status == EMAIL_STATUS_SENDING:
+            return "正在发送"
+        remaining = int((row.task.scheduled_at - datetime.now(row.task.scheduled_at.tzinfo)).total_seconds())
+        if remaining <= 0:
+            return "到点"
+        return format_seconds(remaining)
+
+    def _refresh_email_progress(self) -> None:
+        total = len(self.email_rows)
+        finished = sum(row.status in EMAIL_FINISHED_STATUSES for row in self.email_rows)
+        self.email_progress.configure(maximum=max(1, total), value=finished)
+        self.email_progress_text.set(f"{finished}/{total}")
+
+    def _format_email_exception(self, exc: Exception) -> str:
+        text = str(exc).strip()
+        return text or type(exc).__name__
+
+    def _format_scheduled_at(self, scheduled_at: datetime) -> str:
+        if scheduled_at.tzinfo is None:
+            scheduled_at = scheduled_at.replace(tzinfo=self.tz)
+        return scheduled_at.strftime("%Y-%m-%d %H:%M:%S")
+
+    def _format_timezone(self, scheduled_at: datetime) -> str:
+        if scheduled_at.tzinfo is None:
+            scheduled_at = scheduled_at.replace(tzinfo=self.tz)
+        offset = scheduled_at.utcoffset()
+        label = timezone_label(scheduled_at.tzinfo)
+        if offset is None:
+            return label
+        total_minutes = int(offset.total_seconds() / 60)
+        sign = "+" if total_minutes >= 0 else "-"
+        total_minutes = abs(total_minutes)
+        hours, minutes = divmod(total_minutes, 60)
+        return f"({sign}{hours:02d}:{minutes:02d}) {label}"
 
     def _refresh_saved_accounts(self, selected_email: str | None = None, *, auto_select: bool = True) -> None:
         accounts, active_email = self.store.load()
@@ -440,16 +884,22 @@ class EmailApp:
 
     def _append_email_log(self, message: str, *, level: str | None = None) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
+        tag = ERROR_LOG_TAG if level == ERROR_LOG_TAG or self._is_error_log_message(message) else None
         self.email_log.configure(state="normal")
-        if level == ERROR_LOG_TAG:
-            self.email_log.insert("end", f"[{timestamp}] {message}\n", ERROR_LOG_TAG)
+        if tag:
+            self.email_log.insert("end", f"[{timestamp}] {message}\n", tag)
         else:
             self.email_log.insert("end", f"[{timestamp}] {message}\n")
         self.email_log.see("end")
         self.email_log.configure(state="disabled")
 
+    def _is_error_log_message(self, message: str) -> bool:
+        lowered = (message or "").casefold()
+        return any(keyword.casefold() in lowered for keyword in ERROR_LOG_KEYWORDS)
+
     def _back(self) -> None:
         self.closed = True
+        self.email_stop_event.set()
         clear_root(self.root)
         ModeSelectionApp(self.root)
 

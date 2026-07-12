@@ -25,7 +25,7 @@ class EmailTemplatesTests(unittest.TestCase):
             root = Path(temp_dir)
             data_file = root / "data.csv"
             data_file.write_text(
-                "email,订单号,商品描述,数量\nbuyer@example.com,ORD-1,Bracelet,2\n",
+                "email,run_at,订单号,商品描述,数量\nbuyer@example.com,2026-07-05 10:00,ORD-1,Bracelet,2\n",
                 encoding="utf-8-sig",
             )
             template_file = root / "template.html"
@@ -50,7 +50,7 @@ class EmailTemplatesTests(unittest.TestCase):
             root = Path(temp_dir)
             data_file = root / "data.csv"
             data_file.write_text(
-                "email,订单号,物流单号\nbuyer@example.com,ORD-1,TRACK-1\n",
+                "email,run_at,订单号,物流单号\nbuyer@example.com,2026-07-05 10:00,ORD-1,TRACK-1\n",
                 encoding="utf-8-sig",
             )
             template_file = root / "template.txt"
@@ -70,7 +70,7 @@ class EmailTemplatesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             data_file = root / "data.csv"
-            data_file.write_text("email\nbuyer@example.com\n", encoding="utf-8-sig")
+            data_file.write_text("email,run_at\nbuyer@example.com,2026-07-05 10:00\n", encoding="utf-8-sig")
             template_file = root / "template.txt"
             template_file.write_text("VAT", encoding="utf-8")
             pdf_file = root / "invoice.pdf"
@@ -97,7 +97,7 @@ class EmailTemplatesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             data_file = root / "data.csv"
-            data_file.write_text("email,客户姓名\nbuyer@example.com,Alice\n", encoding="utf-8-sig")
+            data_file.write_text("email,run_at,客户姓名\nbuyer@example.com,2026-07-05 10:00,Alice\n", encoding="utf-8-sig")
             template_file = root / "template.txt"
             template_file.write_text("Hi {{客户姓名}}, code {{优惠码}}", encoding="utf-8")
 
