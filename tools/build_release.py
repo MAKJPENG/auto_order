@@ -482,6 +482,8 @@ def make_inno_script(app_dir: Path, installer_dir: Path, version: str, timestamp
         PrivilegesRequired=lowest
         SetupLogging=yes
         CloseApplications=yes
+        CloseApplicationsFilter={{#MyAppExeName}}
+        RestartApplications=no
         VersionInfoVersion={version_info}
         VersionInfoProductName={{#MyAppName}}
         VersionInfoProductVersion={{#MyAppVersion}}
@@ -489,6 +491,20 @@ def make_inno_script(app_dir: Path, installer_dir: Path, version: str, timestamp
 
         [Languages]
         Name: "chinesesimp"; MessagesFile: "compiler:Default.isl"
+
+        [Code]
+        procedure StopRunningApp();
+        var
+          ResultCode: Integer;
+        begin
+          Exec(ExpandConstant('{{cmd}}'), '/C taskkill /IM "{{#MyAppExeName}}" /F /T >NUL 2>NUL', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+        end;
+
+        function InitializeSetup(): Boolean;
+        begin
+          StopRunningApp();
+          Result := True;
+        end;
 
         [Files]
         Source: "{escape_inno_path(app_dir)}\\*"; DestDir: "{{app}}"; Flags: ignoreversion recursesubdirs createallsubdirs
