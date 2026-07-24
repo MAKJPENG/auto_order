@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from order_bot.paths import app_data_dir, browser_cache_dir, install_dir, install_preview_dir
+from order_bot.paths import app_data_dir, browser_cache_dir, install_dir, install_preview_dir, invoice_preview_dir
 
 
 class PathsTests(unittest.TestCase):
@@ -44,6 +44,10 @@ class PathsTests(unittest.TestCase):
     def test_install_preview_dir_is_under_install_dir(self):
         with patch.dict(os.environ, {"AUTO_ORDER_BOT_INSTALL_DIR": r"D:\AutoOrderInstall"}):
             self.assertEqual(install_preview_dir(), Path(r"D:\AutoOrderInstall") / "email_previews")
+
+    def test_invoice_preview_dir_is_under_install_dir(self):
+        with patch.dict(os.environ, {"AUTO_ORDER_BOT_INSTALL_DIR": r"D:\AutoOrderInstall"}):
+            self.assertEqual(invoice_preview_dir(), Path(r"D:\AutoOrderInstall") / "invoice_previews")
 
     def test_app_data_dir_can_be_overridden(self):
         with patch.dict(os.environ, {"AUTO_ORDER_BOT_DATA_DIR": r"C:\AutoOrderData"}):

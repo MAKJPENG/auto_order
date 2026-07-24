@@ -20,6 +20,10 @@ def install_preview_dir() -> Path:
     return install_dir() / "email_previews"
 
 
+def invoice_preview_dir() -> Path:
+    return install_dir() / "invoice_previews"
+
+
 def app_data_dir() -> Path:
     override = os.environ.get("AUTO_ORDER_BOT_DATA_DIR")
     if override:

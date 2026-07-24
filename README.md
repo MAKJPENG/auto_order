@@ -51,7 +51,13 @@ python -m playwright install chromium
 
 ## 图形界面功能
 
-打开后可以：
+打开后顶部会显示三个 Tab，切换 Tab 不会中断其他正在执行的任务：
+
+- `去下单`：读取订单数据并自动下单。
+- `发邮件`：登录邮箱后批量发送订单确认、物流、VAT 发票或自定义邮件。
+- `生成发票`：读取发票数据表，根据 `company_name` 自动生成每家公司一个模板上传入口，支持 PDF/HTML 模板批量替换并导出发票。
+
+下单页可以：
 
 - 选择订单 CSV 文件。
 - 输入随机分配天数，例如 `3` 或 `30`。
@@ -62,6 +68,16 @@ python -m playwright install chromium
 - 点击“开始下单”后才生成本次随机排期，并显示订单完整表格、秒级计划下单时间、状态、下单倒计时和运行日志。
 - 对 CSV 里已有 `run_at` 的订单，优先使用 `run_at`，不再随机分配。
 - “按国家时区下单”默认开启：`run_at` 和随机时间段都会按订单 `country` 对应的当地时间解释，再自动换算成实际等待时间。
+
+发票页数据文件字段建议使用小写下划线变量名：
+
+- `company_name`：必填，作为选择发票模板的公司 key。
+- `vat_invoice_number`、`payment_date`、`date_of_supply`、`supplier`、`sku`、`description`、`specification`、`quantity`、`unit_price`、`net_amount`、`vat_amount`、`gross_amount`：可按模板需要填写。
+- 发票模板支持 PDF、HTML、HTM。HTML 模板使用 `{{变量名}}` 占位，例如 `{{company_name}}`、`{{vat_invoice_number}}`，变量名对应数据文件列名。
+- PDF 发票模板优先支持“表单字段名精准填充”：用 Adobe Acrobat、Foxit 或 LibreOffice 给 PDF 添加可填写表单字段，字段名设置为数据列名，例如 `vat_invoice_number` 或 `{{gross_amount}}`。程序会按字段名填充并扁平化输出为普通 PDF。
+- 如果 PDF 模板没有表单字段，程序会回退到固定坐标覆盖模式；这种方式依赖版式位置，不如表单字段稳定。
+- 导出格式支持 PDF、HTML、PNG、JPG、Word（DOCX）。输出会按公司名称创建文件夹，文件名为“公司名称-发票号”，例如 `TAGVENUE LIMITED/TAGVENUE LIMITED-INV-0001.pdf`。
+- 发票预览文件会临时生成在安装目录下的 `invoice_previews`，关闭预览弹窗后会自动清理。
 
 执行模式：
 

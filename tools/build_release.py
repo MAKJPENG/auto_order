@@ -21,7 +21,7 @@ MAC_BUNDLE_ID = "com.anxuanfu.auto-order-bot"
 BUILD_CACHE_DIR = ROOT / ".build_cache"
 DEPS_MARKER = BUILD_CACHE_DIR / "requirements.sha256"
 CHROMIUM_MARKER = BUILD_CACHE_DIR / "playwright-chromium.version"
-REQUIRED_IMPORTS = ("playwright", "PyInstaller", "PIL", "tzdata")
+REQUIRED_IMPORTS = ("playwright", "PyInstaller", "PIL", "tzdata", "pypdf", "pypdfium2", "docx")
 
 
 def configure_stdio_encoding() -> None:
@@ -249,6 +249,10 @@ def build_windows(output_dir: Path, version: str, timestamp: str) -> None:
             "playwright",
             "--collect-all",
             "tzdata",
+            "--collect-all",
+            "pypdfium2",
+            "--collect-all",
+            "docx",
             str(ROOT / "run_gui.py"),
         ],
         env=env,
@@ -312,6 +316,10 @@ def build_mac(output_dir: Path, version: str, timestamp: str, *, include_dmg: bo
             "playwright",
             "--collect-all",
             "tzdata",
+            "--collect-all",
+            "pypdfium2",
+            "--collect-all",
+            "docx",
             str(ROOT / "run_gui.py"),
         ],
         env=env,

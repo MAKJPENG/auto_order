@@ -10,7 +10,7 @@ import webbrowser
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from tkinter import BooleanVar, IntVar, StringVar, Tk, filedialog, messagebox
+from tkinter import BooleanVar, IntVar, StringVar, Tk, Toplevel, filedialog, messagebox
 from tkinter import scrolledtext, ttk
 
 from .audit import AuditLogger
@@ -42,8 +42,22 @@ from .email_templates import (
     placeholder_hint,
     validate_email_task,
 )
+from .invoice_generator import (
+    INVOICE_OUTPUT_FORMAT_LABELS,
+    INVOICE_OUTPUT_FORMAT_PDF,
+    InvoiceDataRow,
+    analyze_invoice_template,
+    generate_invoice_file,
+    invoice_output_extension,
+    invoice_output_format_from_label,
+    invoice_output_format_labels,
+    load_invoice_rows,
+    normalize_company_key,
+    output_invoice_path,
+    unique_companies,
+)
 from .models import Order, OrderAttemptResult, ScheduleEntry
-from .paths import install_preview_dir, log_dir
+from .paths import install_preview_dir, invoice_preview_dir, log_dir
 from .scheduler import build_schedule, save_schedule
 from .time_utils import get_timezone, parse_clock, timezone_label
 
@@ -64,6 +78,13 @@ EMAIL_STATUS_SENT = "发送完成"
 EMAIL_STATUS_FAILED = "发送失败"
 EMAIL_STATUS_CANCELLED = "已停止"
 EMAIL_FINISHED_STATUSES = {EMAIL_STATUS_SENT, EMAIL_STATUS_FAILED, EMAIL_STATUS_CANCELLED}
+
+INVOICE_STATUS_PENDING = "待生成"
+INVOICE_STATUS_RUNNING = "生成中"
+INVOICE_STATUS_DONE = "生成完成"
+INVOICE_STATUS_FAILED = "生成失败"
+INVOICE_STATUS_CANCELLED = "已停止"
+INVOICE_FINISHED_STATUSES = {INVOICE_STATUS_DONE, INVOICE_STATUS_FAILED, INVOICE_STATUS_CANCELLED}
 
 FAILED_ROW_TAG = "failed"
 ERROR_LOG_TAG = "error"
@@ -89,6 +110,16 @@ class EmailRowState:
     status: str = EMAIL_STATUS_PENDING
     message: str = ""
     reason: str = ""
+
+
+@dataclass
+class InvoiceRowState:
+    source: InvoiceDataRow
+    item_id: str
+    status: str = INVOICE_STATUS_PENDING
+    message: str = ""
+    reason: str = ""
+    output_file: str = ""
 
 
 class ModeSelectionApp:
@@ -128,11 +159,14 @@ class ModeSelectionApp:
 
 
 class EmailApp:
-    def __init__(self, root: Tk):
+    def __init__(self, root: Tk | ttk.Frame, *, embedded: bool = False):
         self.root = root
-        self.root.title("邮箱登录")
-        self.root.geometry("1220x840")
-        self.root.minsize(980, 700)
+        self.window = root.winfo_toplevel()
+        self.embedded = embedded
+        if not embedded:
+            self.window.title("邮箱登录")
+            self.window.geometry("1220x840")
+            self.window.minsize(980, 700)
         self.closed = False
         self.store = EmailAccountStore()
         self.login_events: queue.Queue[tuple[str, dict]] = queue.Queue()
@@ -162,7 +196,8 @@ class EmailApp:
         self.email_preview_files: set[Path] = set()
         self.email_rows: list[EmailRowState] = []
         self.email_table_columns: list[str] = []
-        self.root.protocol("WM_DELETE_WINDOW", self._close_window)
+        if not embedded:
+            self.window.protocol("WM_DELETE_WINDOW", self._close_window)
         self._build_layout()
         self._refresh_saved_accounts()
         self._poll_login_events()
@@ -185,7 +220,8 @@ class EmailApp:
         ttk.Button(saved_frame, text="切换登录", command=self.switch_login).grid(row=0, column=1, padx=4, pady=8)
         ttk.Button(saved_frame, text="退出登录", command=self.logout_current).grid(row=0, column=2, padx=4, pady=8)
         ttk.Button(saved_frame, text="删除下拉邮箱", command=self.delete_selected_account).grid(row=0, column=3, padx=4, pady=8)
-        ttk.Button(saved_frame, text="返回", command=self._back).grid(row=0, column=4, padx=(16, 8), pady=8)
+        if not self.embedded:
+            ttk.Button(saved_frame, text="返回", command=self._back).grid(row=0, column=4, padx=(16, 8), pady=8)
 
         login_frame = ttk.LabelFrame(outer, text="邮箱登录")
         login_frame.grid(row=1, column=0, sticky="ew", pady=(12, 8))
@@ -982,26 +1018,590 @@ class EmailApp:
         return any(keyword.casefold() in lowered for keyword in ERROR_LOG_KEYWORDS)
 
     def _back(self) -> None:
-        self.closed = True
-        self.email_stop_event.set()
-        self._cleanup_email_preview_files(include_stale=True)
-        self.root.protocol("WM_DELETE_WINDOW", self.root.destroy)
+        self.shutdown()
+        self.window.protocol("WM_DELETE_WINDOW", self.window.destroy)
         clear_root(self.root)
         ModeSelectionApp(self.root)
 
-    def _close_window(self) -> None:
+    def shutdown(self) -> None:
         self.closed = True
         self.email_stop_event.set()
         self._cleanup_email_preview_files(include_stale=True)
-        self.root.destroy()
+
+    def _close_window(self) -> None:
+        self.shutdown()
+        self.window.destroy()
+
+
+class InvoiceApp:
+    def __init__(self, root: Tk | ttk.Frame, *, embedded: bool = False):
+        self.root = root
+        self.window = root.winfo_toplevel()
+        self.embedded = embedded
+        if not embedded:
+            self.window.title("批量生成发票")
+            self.window.geometry("1280x840")
+            self.window.minsize(980, 700)
+            self.window.protocol("WM_DELETE_WINDOW", self._close_window)
+
+        self.data_file = StringVar()
+        self.output_dir = StringVar()
+        self.invoice_output_format = StringVar(value=INVOICE_OUTPUT_FORMAT_LABELS[INVOICE_OUTPUT_FORMAT_PDF])
+        self.status_text = StringVar(value="请选择发票数据文件")
+        self.progress_text = StringVar(value="0/0")
+        self.invoice_events: queue.Queue[tuple[str, dict]] = queue.Queue()
+        self.invoice_worker: threading.Thread | None = None
+        self.invoice_stop_event = threading.Event()
+        self.invoice_rows: list[InvoiceRowState] = []
+        self.invoice_rows_by_index: dict[int, InvoiceRowState] = {}
+        self.invoice_table_columns: list[str] = []
+        self.company_names: list[str] = []
+        self.template_vars: dict[str, StringVar] = {}
+        self.preview_files: set[Path] = set()
+        self.preview_window: Toplevel | None = None
+        self.preview_status = StringVar()
+        self.preview_index = 0
+        self.tz = get_timezone("Asia/Shanghai")
+        self._build_layout()
+        self._poll_invoice_events()
+
+    def _build_layout(self) -> None:
+        outer = ttk.Frame(self.root, padding=18)
+        outer.pack(fill="both", expand=True)
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(2, weight=1, minsize=260)
+        outer.rowconfigure(3, weight=0)
+
+        data_frame = ttk.LabelFrame(outer, text="发票数据")
+        data_frame.grid(row=0, column=0, sticky="ew")
+        data_frame.columnconfigure(1, weight=1)
+        data_frame.columnconfigure(4, weight=1)
+        ttk.Label(data_frame, text="数据文件").grid(row=0, column=0, sticky="w", padx=8, pady=8)
+        ttk.Entry(data_frame, textvariable=self.data_file).grid(row=0, column=1, sticky="ew", padx=4, pady=8)
+        ttk.Button(data_frame, text="选择数据文件", command=self.choose_invoice_data_file).grid(row=0, column=2, padx=8, pady=8)
+        ttk.Button(data_frame, text="识别公司", command=self.load_invoice_data_file).grid(row=0, column=3, padx=4, pady=8)
+        ttk.Label(data_frame, text="输出目录").grid(row=1, column=0, sticky="w", padx=8, pady=8)
+        ttk.Entry(data_frame, textvariable=self.output_dir).grid(row=1, column=1, columnspan=3, sticky="ew", padx=4, pady=8)
+        ttk.Button(data_frame, text="选择输出目录", command=self.choose_invoice_output_dir).grid(row=1, column=4, padx=8, pady=8)
+        ttk.Label(data_frame, text="导出格式").grid(row=2, column=0, sticky="w", padx=8, pady=8)
+        ttk.Combobox(
+            data_frame,
+            textvariable=self.invoice_output_format,
+            state="readonly",
+            width=18,
+            values=invoice_output_format_labels(),
+        ).grid(row=2, column=1, sticky="w", padx=4, pady=8)
+        ttk.Label(data_frame, textvariable=self.status_text).grid(row=3, column=0, columnspan=5, sticky="ew", padx=8, pady=(0, 8))
+
+        self.template_frame = ttk.LabelFrame(outer, text="发票模板（按 company_name 自动生成入口）")
+        self.template_frame.grid(row=1, column=0, sticky="ew", pady=(10, 8))
+        self.template_frame.columnconfigure(1, weight=1)
+        ttk.Label(
+            self.template_frame,
+            text="请选择数据文件并点击“识别公司”，系统会按公司名称生成对应模板上传入口。",
+            foreground="#666666",
+        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=10)
+
+        table_frame = ttk.LabelFrame(outer, text="发票任务进度")
+        table_frame.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
+        self.invoice_table = ttk.Treeview(table_frame, show="headings", height=10)
+        invoice_y_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.invoice_table.yview)
+        invoice_x_scroll = ttk.Scrollbar(table_frame, orient="horizontal", command=self.invoice_table.xview)
+        self.invoice_table.configure(yscrollcommand=invoice_y_scroll.set, xscrollcommand=invoice_x_scroll.set)
+        self.invoice_table.tag_configure(FAILED_ROW_TAG, foreground="#b00020")
+        self.invoice_table.grid(row=0, column=0, sticky="nsew")
+        invoice_y_scroll.grid(row=0, column=1, sticky="ns")
+        invoice_x_scroll.grid(row=1, column=0, sticky="ew")
+        table_frame.rowconfigure(0, weight=1)
+        table_frame.columnconfigure(0, weight=1)
+
+        actions = ttk.Frame(outer)
+        actions.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        ttk.Button(actions, text="预览发票", command=self.preview_invoice).pack(side="left")
+        self.start_invoice_button = ttk.Button(actions, text="批量生成发票", command=self.start_invoice_generation)
+        self.start_invoice_button.pack(side="left", padx=8)
+        self.stop_invoice_button = ttk.Button(actions, text="停止等待", command=self.stop_invoice_generation, state="disabled")
+        self.stop_invoice_button.pack(side="left")
+        ttk.Label(actions, textvariable=self.progress_text).pack(side="right")
+        self.invoice_progress = ttk.Progressbar(actions, mode="determinate", length=220)
+        self.invoice_progress.pack(side="right", padx=8)
+
+        log_frame = ttk.LabelFrame(outer, text="运行日志")
+        log_frame.grid(row=4, column=0, sticky="ew", pady=(8, 0))
+        self.invoice_log = scrolledtext.ScrolledText(log_frame, height=9, state="disabled")
+        self.invoice_log.tag_configure(ERROR_LOG_TAG, foreground="#b00020")
+        self.invoice_log.pack(fill="both", expand=True)
+
+    def choose_invoice_data_file(self) -> None:
+        filename = filedialog.askopenfilename(
+            title="选择发票数据文件",
+            filetypes=(("Data files", "*.csv *.xlsx"), ("CSV files", "*.csv"), ("Excel files", "*.xlsx"), ("All files", "*.*")),
+        )
+        if not filename:
+            return
+        self.data_file.set(filename)
+        if not self.output_dir.get().strip():
+            self.output_dir.set(str(log_dir().parent / "generated_invoices"))
+        self.load_invoice_data_file()
+
+    def choose_invoice_output_dir(self) -> None:
+        dirname = filedialog.askdirectory(title="选择发票输出目录")
+        if dirname:
+            self.output_dir.set(dirname)
+
+    def load_invoice_data_file(self) -> None:
+        data_path = self._optional_path(self.data_file.get())
+        if data_path is None:
+            self._append_invoice_log("请选择发票数据文件。", level=ERROR_LOG_TAG)
+            self.status_text.set("请选择发票数据文件")
+            return
+        try:
+            rows = load_invoice_rows(data_path)
+        except Exception as exc:
+            self.status_text.set("发票数据读取失败")
+            self._append_invoice_log(f"发票数据读取失败：{exc}", level=ERROR_LOG_TAG)
+            self._clear_invoice_rows()
+            self._render_company_template_inputs([])
+            return
+
+        self.company_names = unique_companies(rows)
+        self._display_invoice_rows(rows)
+        self._render_company_template_inputs(self.company_names)
+        self.status_text.set(f"已识别 {len(rows)} 条发票数据、{len(self.company_names)} 家公司")
+        self._append_invoice_log(f"已识别 {len(rows)} 条发票数据，发现公司：{', '.join(self.company_names)}")
+
+    def _render_company_template_inputs(self, companies: list[str]) -> None:
+        for child in self.template_frame.winfo_children():
+            child.destroy()
+        if not companies:
+            ttk.Label(
+                self.template_frame,
+                text="请选择数据文件并点击“识别公司”，系统会按公司名称生成对应模板上传入口。",
+                foreground="#666666",
+            ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=10)
+            return
+
+        self.template_frame.columnconfigure(1, weight=1)
+        for row_index, company in enumerate(companies):
+            company_key = normalize_company_key(company)
+            template_var = self.template_vars.setdefault(company_key, StringVar())
+            ttk.Label(self.template_frame, text=company).grid(row=row_index, column=0, sticky="w", padx=8, pady=6)
+            ttk.Entry(self.template_frame, textvariable=template_var).grid(row=row_index, column=1, sticky="ew", padx=4, pady=6)
+            ttk.Button(
+                self.template_frame,
+                text="选择模板",
+                command=lambda current_company=company: self.choose_invoice_template(current_company),
+            ).grid(row=row_index, column=2, sticky="e", padx=8, pady=6)
+
+    def choose_invoice_template(self, company: str) -> None:
+        filename = filedialog.askopenfilename(
+            title=f"选择 {company} 的发票模板",
+            filetypes=(
+                ("Invoice templates", "*.pdf *.html *.htm"),
+                ("PDF files", "*.pdf"),
+                ("HTML files", "*.html *.htm"),
+                ("All files", "*.*"),
+            ),
+        )
+        if not filename:
+            return
+        company_key = normalize_company_key(company)
+        self.template_vars.setdefault(company_key, StringVar()).set(filename)
+        try:
+            analysis = analyze_invoice_template(Path(filename))
+        except Exception as exc:
+            self._append_invoice_log(f"{company} 模板读取失败：{exc}", level=ERROR_LOG_TAG)
+            return
+        if analysis.style == "html":
+            fields = "、".join(analysis.field_names[:8])
+            suffix = "..." if len(analysis.field_names) > 8 else ""
+            self._append_invoice_log(
+                f"{company} HTML模板已选择：{analysis.path.name}，检测到 {len(analysis.field_names)} 个变量：{fields}{suffix}"
+            )
+        elif analysis.field_names:
+            fields = "、".join(analysis.field_names[:8])
+            suffix = "..." if len(analysis.field_names) > 8 else ""
+            self._append_invoice_log(
+                f"{company} 模板已选择：{analysis.path.name}，检测到 {len(analysis.field_names)} 个表单变量：{fields}{suffix}"
+            )
+        else:
+            self._append_invoice_log(
+                f"{company} 模板已选择：{analysis.path.name}，未检测到表单变量，将使用固定坐标覆盖；页数：{analysis.page_count}"
+            )
+
+    def preview_invoice(self) -> None:
+        if not self.invoice_rows:
+            self.load_invoice_data_file()
+        if not self.invoice_rows:
+            return
+        self.preview_index = min(self.preview_index, len(self.invoice_rows) - 1)
+        self._open_invoice_preview_window()
+        self._render_invoice_preview(self.preview_index)
+
+    def _open_invoice_preview_window(self) -> None:
+        if self.preview_window and self.preview_window.winfo_exists():
+            self.preview_window.lift()
+            return
+        self.preview_window = Toplevel(self.window)
+        self.preview_window.title("发票预览")
+        self.preview_window.geometry("620x180")
+        self.preview_window.minsize(520, 160)
+        self.preview_window.protocol("WM_DELETE_WINDOW", self._close_invoice_preview_window)
+        frame = ttk.Frame(self.preview_window, padding=18)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, textvariable=self.preview_status, wraplength=560).pack(fill="x")
+        button_frame = ttk.Frame(frame)
+        button_frame.pack(fill="x", pady=(18, 0))
+        ttk.Button(button_frame, text="上一条", command=lambda: self._switch_invoice_preview(-1)).pack(side="left")
+        ttk.Button(button_frame, text="下一条", command=lambda: self._switch_invoice_preview(1)).pack(side="left", padx=8)
+        ttk.Button(button_frame, text="重新打开预览", command=self._open_current_preview_file).pack(side="left")
+        ttk.Button(button_frame, text="关闭并清理", command=self._close_invoice_preview_window).pack(side="right")
+
+    def _switch_invoice_preview(self, delta: int) -> None:
+        if not self.invoice_rows:
+            return
+        self.preview_index = (self.preview_index + delta) % len(self.invoice_rows)
+        self._render_invoice_preview(self.preview_index)
+
+    def _render_invoice_preview(self, index: int) -> None:
+        row_state = self.invoice_rows[index]
+        template_path = self._template_path_for_company(row_state.source.company_name)
+        if template_path is None:
+            message = f"{row_state.source.company_name} 未选择发票模板，无法预览。"
+            self.preview_status.set(message)
+            self._append_invoice_log(message, level=ERROR_LOG_TAG)
+            return
+
+        preview_dir = invoice_preview_dir()
+        timestamp = datetime.now(self.tz).strftime("%Y%m%d-%H%M%S-%f")
+        try:
+            output_format = invoice_output_format_from_label(self.invoice_output_format.get())
+        except Exception as exc:
+            message = f"发票预览生成失败：{exc}"
+            self.preview_status.set(message)
+            self._append_invoice_log(message, level=ERROR_LOG_TAG)
+            return
+        preview_path = preview_dir / f"invoice-preview-{timestamp}{invoice_output_extension(output_format)}"
+        try:
+            result = generate_invoice_file(
+                template_path=template_path,
+                row=row_state.source,
+                output_path=preview_path,
+                output_format=output_format,
+            )
+        except Exception as exc:
+            message = f"发票预览生成失败：{exc}"
+            self.preview_status.set(message)
+            self._append_invoice_log(message, level=ERROR_LOG_TAG)
+            return
+
+        self.preview_files.add(result.output_path)
+        invoice_number = row_state.source.values.get("vat_invoice_number", "") or f"第 {row_state.source.row_index} 行"
+        self.preview_status.set(f"正在预览 {index + 1}/{len(self.invoice_rows)}：{row_state.source.company_name}，{invoice_number}\n{result.output_path}")
+        self._append_invoice_log(f"发票预览已生成：{result.output_path}")
+        self._open_file(result.output_path)
+
+    def _open_current_preview_file(self) -> None:
+        if not self.preview_files:
+            self._render_invoice_preview(self.preview_index)
+            return
+        latest = max(self.preview_files, key=lambda path: path.stat().st_mtime if path.exists() else 0)
+        self._open_file(latest)
+
+    def _close_invoice_preview_window(self) -> None:
+        self._cleanup_invoice_preview_files()
+        if self.preview_window and self.preview_window.winfo_exists():
+            self.preview_window.destroy()
+        self.preview_window = None
+
+    def start_invoice_generation(self) -> None:
+        if self.invoice_worker and self.invoice_worker.is_alive():
+            self._append_invoice_log("发票生成任务正在运行中，请稍等")
+            return
+        if not self.invoice_rows:
+            self.load_invoice_data_file()
+        if not self.invoice_rows:
+            return
+
+        output_dir = self._optional_path(self.output_dir.get()) or (log_dir().parent / "generated_invoices")
+        try:
+            output_format = invoice_output_format_from_label(self.invoice_output_format.get())
+        except Exception as exc:
+            self.status_text.set("发票导出格式错误")
+            self._append_invoice_log(f"发票导出格式错误：{exc}", level=ERROR_LOG_TAG)
+            return
+        template_map = self._template_map()
+        missing_companies = [
+            company
+            for company in self.company_names
+            if normalize_company_key(company) not in template_map
+        ]
+        if missing_companies:
+            self.status_text.set("发票模板未选择完整")
+            self._append_invoice_log("以下公司未选择发票模板：" + "、".join(missing_companies), level=ERROR_LOG_TAG)
+            return
+
+        self.invoice_stop_event.clear()
+        self.start_invoice_button.configure(state="disabled")
+        self.stop_invoice_button.configure(state="normal")
+        self.status_text.set("发票生成任务已启动")
+        self._append_invoice_log(f"发票生成任务启动，共 {len(self.invoice_rows)} 条，格式：{output_format}，输出目录：{output_dir}")
+        self.invoice_worker = threading.Thread(
+            target=self._run_invoice_worker,
+            kwargs={"output_dir": output_dir, "template_map": template_map, "output_format": output_format},
+            daemon=True,
+        )
+        self.invoice_worker.start()
+
+    def stop_invoice_generation(self) -> None:
+        self.invoice_stop_event.set()
+        self.status_text.set("正在停止发票生成")
+        self._append_invoice_log("收到停止发票生成请求")
+
+    def _run_invoice_worker(self, *, output_dir: Path, template_map: dict[str, Path], output_format: str) -> None:
+        try:
+            for row_state in self.invoice_rows:
+                source = row_state.source
+                if self.invoice_stop_event.is_set():
+                    self._emit_invoice("invoice_cancelled", row_index=source.row_index, message="用户停止生成")
+                    continue
+                template_path = template_map[normalize_company_key(source.company_name)]
+                output_path = output_invoice_path(output_dir, source, output_format=output_format)
+                self._emit_invoice(
+                    "invoice_running",
+                    row_index=source.row_index,
+                    message=f"正在生成 {source.company_name} 发票（{output_format}）",
+                )
+                try:
+                    result = generate_invoice_file(
+                        template_path=template_path,
+                        row=source,
+                        output_path=output_path,
+                        output_format=output_format,
+                    )
+                except Exception as exc:
+                    self._emit_invoice("invoice_failed", row_index=source.row_index, reason=str(exc))
+                else:
+                    self._emit_invoice(
+                        "invoice_done",
+                        row_index=source.row_index,
+                        output_file=str(result.output_path),
+                        message="发票已生成",
+                    )
+        finally:
+            self._emit_invoice("invoice_worker_done")
+
+    def _emit_invoice(self, event: str, **payload) -> None:
+        self.invoice_events.put((event, payload))
+
+    def _poll_invoice_events(self) -> None:
+        try:
+            while True:
+                event, payload = self.invoice_events.get_nowait()
+                self._handle_invoice_event(event, payload)
+        except queue.Empty:
+            pass
+        self.root.after(250, self._poll_invoice_events)
+
+    def _handle_invoice_event(self, event: str, payload: dict) -> None:
+        row_index = payload.get("row_index")
+        row = self.invoice_rows_by_index.get(row_index) if row_index is not None else None
+        if event == "invoice_running" and row:
+            row.status = INVOICE_STATUS_RUNNING
+            row.message = payload.get("message", "正在生成")
+            self._append_invoice_log(f"第 {row.source.row_index} 行：{row.message}")
+            self._refresh_invoice_row(row)
+        elif event == "invoice_done" and row:
+            row.status = INVOICE_STATUS_DONE
+            row.message = payload.get("message", "发票已生成")
+            row.output_file = payload.get("output_file", "")
+            self._append_invoice_log(f"第 {row.source.row_index} 行：发票已生成 {row.output_file}")
+            self._refresh_invoice_row(row)
+        elif event == "invoice_failed" and row:
+            row.status = INVOICE_STATUS_FAILED
+            row.reason = payload.get("reason", "未知错误")
+            row.message = "发票生成失败"
+            self._append_invoice_log(f"第 {row.source.row_index} 行：发票生成失败，{row.reason}", level=ERROR_LOG_TAG)
+            self._refresh_invoice_row(row)
+        elif event == "invoice_cancelled" and row:
+            row.status = INVOICE_STATUS_CANCELLED
+            row.message = payload.get("message", "已停止")
+            self._append_invoice_log(f"第 {row.source.row_index} 行：已停止", level=ERROR_LOG_TAG)
+            self._refresh_invoice_row(row)
+        elif event == "invoice_worker_done":
+            self.start_invoice_button.configure(state="normal")
+            self.stop_invoice_button.configure(state="disabled")
+            self.status_text.set("发票生成任务结束")
+            self._append_invoice_log("发票生成任务结束")
+        self._refresh_invoice_progress()
+
+    def _display_invoice_rows(self, rows: list[InvoiceDataRow]) -> None:
+        self.invoice_rows = [InvoiceRowState(source=row, item_id="") for row in rows]
+        self.invoice_rows_by_index = {row.source.row_index: row for row in self.invoice_rows}
+        raw_columns = sorted({key for row in rows for key in row.values.keys()})
+        computed_columns = {"status", "company_name", "row_index", "invoice_number", "message", "reason", "output_file"}
+        self.invoice_table_columns = [
+            "status",
+            "company_name",
+            "row_index",
+            "invoice_number",
+            "message",
+            "reason",
+            "output_file",
+            *[column for column in raw_columns if column not in computed_columns],
+        ]
+        self.invoice_table.delete(*self.invoice_table.get_children())
+        self.invoice_table.configure(columns=self.invoice_table_columns)
+        headings = {
+            "status": "状态",
+            "company_name": "公司名称",
+            "row_index": "数据行",
+            "invoice_number": "发票号",
+            "message": "执行信息",
+            "reason": "失败原因",
+            "output_file": "输出文件",
+        }
+        widths = {
+            "status": 90,
+            "company_name": 260,
+            "row_index": 80,
+            "invoice_number": 150,
+            "message": 180,
+            "reason": 280,
+            "output_file": 320,
+        }
+        for column in self.invoice_table_columns:
+            self.invoice_table.heading(column, text=headings.get(column, column))
+            self.invoice_table.column(column, width=widths.get(column, 140), minwidth=80, stretch=True)
+        for row in self.invoice_rows:
+            item_id = self.invoice_table.insert("", "end", values=self._invoice_row_values(row), tags=self._invoice_row_tags(row))
+            row.item_id = item_id
+        self._refresh_invoice_progress()
+
+    def _clear_invoice_rows(self) -> None:
+        self.invoice_rows.clear()
+        self.invoice_rows_by_index.clear()
+        self.company_names = []
+        self.invoice_table_columns = []
+        if hasattr(self, "invoice_table"):
+            self.invoice_table.delete(*self.invoice_table.get_children())
+        if hasattr(self, "invoice_progress"):
+            self.invoice_progress.configure(maximum=1, value=0)
+        self.progress_text.set("0/0")
+
+    def _refresh_invoice_row(self, row: InvoiceRowState) -> None:
+        if row.item_id:
+            self.invoice_table.item(row.item_id, values=self._invoice_row_values(row), tags=self._invoice_row_tags(row))
+
+    def _invoice_row_values(self, row: InvoiceRowState) -> list[str]:
+        values = {
+            "status": row.status,
+            "company_name": row.source.company_name,
+            "row_index": str(row.source.row_index),
+            "invoice_number": row.source.values.get("vat_invoice_number", ""),
+            "message": row.message,
+            "reason": row.reason,
+            "output_file": row.output_file,
+            **row.source.values,
+        }
+        return [values.get(column, "") for column in self.invoice_table_columns]
+
+    def _invoice_row_tags(self, row: InvoiceRowState) -> tuple[str, ...]:
+        return (FAILED_ROW_TAG,) if row.status in {INVOICE_STATUS_FAILED, INVOICE_STATUS_CANCELLED} else ()
+
+    def _refresh_invoice_progress(self) -> None:
+        total = len(self.invoice_rows)
+        finished = sum(1 for row in self.invoice_rows if row.status in INVOICE_FINISHED_STATUSES)
+        if hasattr(self, "invoice_progress"):
+            self.invoice_progress.configure(maximum=max(1, total), value=finished)
+        self.progress_text.set(f"{finished}/{total}")
+
+    def _template_map(self) -> dict[str, Path]:
+        template_map: dict[str, Path] = {}
+        for company in self.company_names:
+            company_key = normalize_company_key(company)
+            template_var = self.template_vars.get(company_key)
+            template_path = self._optional_path(template_var.get()) if template_var is not None else None
+            if template_path and template_path.exists():
+                template_map[company_key] = template_path
+        return template_map
+
+    def _template_path_for_company(self, company: str) -> Path | None:
+        company_key = normalize_company_key(company)
+        template_var = self.template_vars.get(company_key)
+        if template_var is None:
+            return None
+        template_path = self._optional_path(template_var.get())
+        if template_path and template_path.exists():
+            return template_path
+        return None
+
+    def _open_file(self, path: Path) -> None:
+        try:
+            if hasattr(os, "startfile"):
+                os.startfile(str(path))  # type: ignore[attr-defined]
+            else:
+                webbrowser.open(path.as_uri())
+        except Exception as exc:
+            self._append_invoice_log(f"自动打开文件失败：{exc}", level=ERROR_LOG_TAG)
+            self._append_invoice_log(f"请手动打开文件：{path}")
+
+    def _cleanup_invoice_preview_files(self) -> None:
+        paths = set(self.preview_files)
+        preview_dir = invoice_preview_dir()
+        if preview_dir.exists():
+            paths.update(preview_dir.glob("invoice-preview-*.*"))
+        for path in sorted(paths):
+            try:
+                if path.exists():
+                    path.unlink()
+            except OSError as exc:
+                self._append_invoice_log(f"发票预览清理失败：{path}，{exc}", level=ERROR_LOG_TAG)
+            else:
+                self.preview_files.discard(path)
+        try:
+            if preview_dir.exists() and not any(preview_dir.iterdir()):
+                preview_dir.rmdir()
+        except OSError:
+            pass
+
+    def _optional_path(self, value: str) -> Path | None:
+        value = (value or "").strip()
+        return Path(value) if value else None
+
+    def _append_invoice_log(self, message: str, *, level: str | None = None) -> None:
+        timestamp = datetime.now(self.tz).strftime("%H:%M:%S")
+        tag = ERROR_LOG_TAG if level == ERROR_LOG_TAG or self._is_error_log_message(message) else None
+        self.invoice_log.configure(state="normal")
+        if tag:
+            self.invoice_log.insert("end", f"[{timestamp}] {message}\n", tag)
+        else:
+            self.invoice_log.insert("end", f"[{timestamp}] {message}\n")
+        self.invoice_log.see("end")
+        self.invoice_log.configure(state="disabled")
+
+    def _is_error_log_message(self, message: str) -> bool:
+        lowered = (message or "").casefold()
+        return any(keyword.casefold() in lowered for keyword in ERROR_LOG_KEYWORDS)
+
+    def shutdown(self) -> None:
+        self.invoice_stop_event.set()
+        self._cleanup_invoice_preview_files()
+
+    def _close_window(self) -> None:
+        self.shutdown()
+        self.window.destroy()
 
 
 class OrderBotApp:
-    def __init__(self, root: Tk):
+    def __init__(self, root: Tk | ttk.Frame, *, embedded: bool = False):
         self.root = root
-        self.root.title("自动下单机器人")
-        self.root.geometry("1280x760")
-        self.root.minsize(980, 620)
+        self.window = root.winfo_toplevel()
+        self.embedded = embedded
+        if not embedded:
+            self.window.title("自动下单机器人")
+            self.window.geometry("1280x760")
+            self.window.minsize(980, 620)
 
         self.csv_path = StringVar()
         self.days = IntVar(value=3)
@@ -1030,6 +1630,9 @@ class OrderBotApp:
         self._build_layout()
         self._poll_events()
         self._tick_countdowns()
+
+    def shutdown(self) -> None:
+        self.stop_event.set()
 
     def _build_layout(self) -> None:
         outer = ttk.Frame(self.root, padding=12)
@@ -1623,6 +2226,36 @@ class OrderBotApp:
         return any(keyword.casefold() in lowered for keyword in ERROR_LOG_KEYWORDS)
 
 
+class MainTabbedApp:
+    def __init__(self, root: Tk):
+        self.root = root
+        self.root.title("自动下单机器人")
+        self.root.geometry("1280x860")
+        self.root.minsize(980, 700)
+        self.notebook = ttk.Notebook(root)
+        self.notebook.pack(fill="both", expand=True)
+
+        self.order_frame = ttk.Frame(self.notebook)
+        self.email_frame = ttk.Frame(self.notebook)
+        self.invoice_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.order_frame, text="去下单")
+        self.notebook.add(self.email_frame, text="发邮件")
+        self.notebook.add(self.invoice_frame, text="生成发票")
+
+        self.order_app = OrderBotApp(self.order_frame, embedded=True)
+        self.email_app = EmailApp(self.email_frame, embedded=True)
+        self.invoice_app = InvoiceApp(self.invoice_frame, embedded=True)
+        self.root.protocol("WM_DELETE_WINDOW", self._close_window)
+
+    def _close_window(self) -> None:
+        for app in (self.order_app, self.email_app, self.invoice_app):
+            try:
+                app.shutdown()
+            except Exception:
+                pass
+        self.root.destroy()
+
+
 def format_seconds(seconds: int) -> str:
     days, remainder = divmod(seconds, 86400)
     hours, remainder = divmod(remainder, 3600)
@@ -1650,7 +2283,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     root = Tk()
-    ModeSelectionApp(root)
+    MainTabbedApp(root)
     root.mainloop()
     return 0
 
